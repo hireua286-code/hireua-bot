@@ -333,7 +333,11 @@ async def telegram_file_url(context: ContextTypes.DEFAULT_TYPE, file_id: str):
 def graph_post(endpoint, data):
     data["access_token"] = PAGE_ACCESS_TOKEN
     response = requests.post(f"{GRAPH_URL}/{endpoint}", data=data, timeout=120)
-    payload = response.json()
+
+    try:
+        payload = response.json()
+    except Exception:
+        raise RuntimeError(f"Meta returned non-JSON response: {response.text}")
 
     if response.status_code >= 400 or "error" in payload:
         raise RuntimeError(payload)
@@ -361,22 +365,41 @@ def publish_facebook_video(video_url, description):
     })
 
 
-def wait_instagram_media_ready(creation_id, max_attempts=24, delay=5):
+def get_instagram_media_status(creation_id):
+    response = requests.get(
+        f"{GRAPH_URL}/{creation_id}",
+        params={
+            "fields": "status_code",
+            "access_token": PAGE_ACCESS_TOKEN,
+        },
+        timeout=60,
+    )
+
+    try:
+        payload = response.json()
+    except Exception:
+        raise RuntimeError(f"Instagram status returned non-JSON response: {response.text}")
+
+    if response.status_code >= 400 or "error" in payload:
+        raise RuntimeError(payload)
+
+    return payload
+
+
+def wait_instagram_media_ready(creation_id, max_attempts=60, delay=5):
     last_status = None
     last_response = None
 
-    for attempt in range(max_attempts):
-        check = requests.get(
-            f"{GRAPH_URL}/{creation_id}",
-            params={
-                "fields": "status_code",
-                "access_token": PAGE_ACCESS_TOKEN,
-            },
-            timeout=60,
-        ).json()
+    for attempt in range(1, max_attempts + 1):
+        check = get_instagram_media_status(creation_id)
 
         last_response = check
         last_status = check.get("status_code")
+
+        print(
+            f"Instagram media status attempt {attempt}/{max_attempts}: {last_status}",
+            flush=True,
+        )
 
         if last_status == "FINISHED":
             return True
@@ -388,16 +411,27 @@ def wait_instagram_media_ready(creation_id, max_attempts=24, delay=5):
 
     raise RuntimeError({
         "message": "Instagram media not ready after waiting",
+        "creation_id": creation_id,
         "last_status": last_status,
         "last_response": last_response,
     })
 
 
-def instagram_publish_with_retry(creation_id, attempts=3, delay=10):
+def is_media_not_ready_error(error_text):
+    return (
+        "Media ID is not available" in error_text
+        or "Медиаданные не готовы" in error_text
+        or "2207027" in error_text
+        or "9007" in error_text
+    )
+
+
+def instagram_publish_with_retry(creation_id, attempts=5, delay=20):
     last_error = None
 
-    for attempt in range(attempts):
+    for attempt in range(1, attempts + 1):
         try:
+            print(f"Instagram publish attempt {attempt}/{attempts}", flush=True)
             return graph_post(f"{IG_USER_ID}/media_publish", {
                 "creation_id": creation_id,
             })
@@ -405,7 +439,9 @@ def instagram_publish_with_retry(creation_id, attempts=3, delay=10):
             last_error = e
             error_text = str(e)
 
-            if "Media ID is not available" in error_text or "Медиаданные не готовы" in error_text or "2207027" in error_text:
+            print(f"Instagram publish error attempt {attempt}: {error_text}", flush=True)
+
+            if is_media_not_ready_error(error_text) and attempt < attempts:
                 time_module.sleep(delay)
                 continue
 
@@ -415,19 +451,26 @@ def instagram_publish_with_retry(creation_id, attempts=3, delay=10):
 
 
 def publish_instagram_photo(image_url, caption):
+    print("Instagram photo: creating media container", flush=True)
+
     create = graph_post(f"{IG_USER_ID}/media", {
         "image_url": image_url,
         "caption": caption or "",
     })
 
     creation_id = create["id"]
+    print(f"Instagram photo creation_id: {creation_id}", flush=True)
 
-    wait_instagram_media_ready(creation_id, max_attempts=24, delay=5)
+    time_module.sleep(20)
 
-    return instagram_publish_with_retry(creation_id, attempts=3, delay=10)
+    wait_instagram_media_ready(creation_id, max_attempts=60, delay=5)
+
+    return instagram_publish_with_retry(creation_id, attempts=5, delay=20)
 
 
 def publish_instagram_reels(video_url, caption):
+    print("Instagram reels: creating media container", flush=True)
+
     create = graph_post(f"{IG_USER_ID}/media", {
         "media_type": "REELS",
         "video_url": video_url,
@@ -435,10 +478,13 @@ def publish_instagram_reels(video_url, caption):
     })
 
     creation_id = create["id"]
+    print(f"Instagram reels creation_id: {creation_id}", flush=True)
 
-    wait_instagram_media_ready(creation_id, max_attempts=60, delay=5)
+    time_module.sleep(30)
 
-    return instagram_publish_with_retry(creation_id, attempts=3, delay=15)
+    wait_instagram_media_ready(creation_id, max_attempts=90, delay=5)
+
+    return instagram_publish_with_retry(creation_id, attempts=5, delay=30)
 
 
 async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
