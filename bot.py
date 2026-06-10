@@ -1,10 +1,12 @@
 import os
 import asyncio
 import threading
+import time as time_module
 from copy import deepcopy
-from datetime import time
+from datetime import time, datetime, timedelta
 
 import pytz
+import requests
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -19,7 +21,12 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
+FB_PAGE_ID = os.getenv("FB_PAGE_ID")
+IG_USER_ID = os.getenv("IG_USER_ID")
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
+GRAPH_URL = "https://graph.facebook.com/v25.0"
 
 CHANNELS = {
     "kyiv": ("Київ", "@HireKyiv"),
@@ -36,7 +43,6 @@ PACKAGES = {
 }
 
 sessions = {}
-
 web_app = Flask(__name__)
 
 
@@ -56,36 +62,33 @@ def admin_only(update: Update) -> bool:
 
 def new_session():
     return {
-        "step": "ask_media",
-        "file_id": None,
-        "media_type": None,
-        "text": "",
+        "step": "tg_banner",
+        "telegram": {"banner": False, "reels": False, "text": False, "promote": False},
+        "facebook": {"banner": False, "reels": False, "text": False, "promote": False},
+        "instagram": {"banner": False, "reels": False, "promote": False},
         "channels": [],
+        "banner_file_id": None,
+        "reels_file_id": None,
+        "text": "",
         "package": None,
+        "days": 1,
     }
 
 
 def yes_no_keyboard(prefix):
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("Так", callback_data=f"{prefix}_yes"),
-            InlineKeyboardButton("Ні", callback_data=f"{prefix}_no"),
+            InlineKeyboardButton("Так", callback_data=f"{prefix}:yes"),
+            InlineKeyboardButton("Ні", callback_data=f"{prefix}:no"),
         ]
     ])
 
 
 def channels_keyboard(selected):
     keyboard = []
-
     for key, (name, chat) in CHANNELS.items():
         mark = "✅" if key in selected else "☐"
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{mark} {name} {chat}",
-                callback_data=f"channel:{key}",
-            )
-        ])
-
+        keyboard.append([InlineKeyboardButton(f"{mark} {name} {chat}", callback_data=f"channel:{key}")])
     keyboard.append([InlineKeyboardButton("✅ Готово", callback_data="channels_done")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -98,16 +101,25 @@ def packages_keyboard():
     ])
 
 
+def days_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("1 день", callback_data="days:1")],
+        [InlineKeyboardButton("3 дні", callback_data="days:3")],
+        [InlineKeyboardButton("7 днів", callback_data="days:7")],
+        [InlineKeyboardButton("14 днів", callback_data="days:14")],
+        [InlineKeyboardButton("30 днів", callback_data="days:30")],
+    ])
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin_only(update):
         return
 
-    user_id = update.effective_user.id
-    sessions[user_id] = new_session()
+    sessions[update.effective_user.id] = new_session()
 
     await update.message.reply_text(
-        "👋 HireUA Publisher Bot працює.\n\nФото або відео буде?",
-        reply_markup=yes_no_keyboard("media"),
+        "👋 HireUA Publisher Bot працює.\n\nTelegram канали\n\nБанер буде?",
+        reply_markup=yes_no_keyboard("tg_banner"),
     )
 
 
@@ -127,74 +139,116 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = query.from_user.id
-
-    if user_id not in sessions:
-        sessions[user_id] = new_session()
-
-    session = sessions[user_id]
+    session = sessions.setdefault(user_id, new_session())
     data = query.data
 
-    if data == "media_yes":
-        session["step"] = "wait_media"
-        await query.edit_message_text("Надішліть фото або відео.")
+    if ":" in data:
+        key, value = data.split(":", 1)
+    else:
+        key, value = data, ""
 
-    elif data == "media_no":
-        session["file_id"] = None
-        session["media_type"] = None
-        session["step"] = "ask_text"
-        await query.edit_message_text(
-            "Текст буде?",
-            reply_markup=yes_no_keyboard("text"),
-        )
+    answer = value == "yes"
 
-    elif data == "text_yes":
-        session["step"] = "wait_text"
-        await query.edit_message_text("Надішліть текст публікації.")
+    steps = {
+        "tg_banner": ("telegram", "banner", "Telegram канали\n\nReels буде?", "tg_reels"),
+        "tg_reels": ("telegram", "reels", "Telegram канали\n\nТекст буде?", "tg_text"),
+        "tg_text": ("telegram", "text", "Telegram канали\n\nПросувати буде?", "tg_promote"),
+        "tg_promote": ("telegram", "promote", "Оберіть Telegram канали:", "choose_channels"),
 
-    elif data == "text_no":
-        session["text"] = ""
-        session["step"] = "choose_channels"
-        await query.edit_message_text(
-            "Оберіть канали для публікації:",
-            reply_markup=channels_keyboard(session["channels"]),
-        )
+        "fb_banner": ("facebook", "banner", "Facebook\n\nReels буде?", "fb_reels"),
+        "fb_reels": ("facebook", "reels", "Facebook\n\nТекст буде?", "fb_text"),
+        "fb_text": ("facebook", "text", "Facebook\n\nПросувати буде?", "fb_promote"),
+        "fb_promote": ("facebook", "promote", "Instagram\n\nБанер буде?", "ig_banner"),
 
-    elif data.startswith("channel:"):
-        key = data.split(":", 1)[1]
+        "ig_banner": ("instagram", "banner", "Instagram\n\nReels буде?", "ig_reels"),
+        "ig_reels": ("instagram", "reels", "Instagram\n\nПросувати буде?", "ig_promote"),
+        "ig_promote": ("instagram", "promote", "Перевіряю, які матеріали потрібні...", "after_questions"),
+    }
 
-        if key in session["channels"]:
-            session["channels"].remove(key)
-        else:
-            session["channels"].append(key)
+    if key in steps:
+        platform, field, next_text, next_step = steps[key]
+        session[platform][field] = answer
 
-        await query.edit_message_text(
-            "Оберіть канали для публікації:",
-            reply_markup=channels_keyboard(session["channels"]),
-        )
-
-    elif data == "channels_done":
-        if not session["channels"]:
-            await query.answer("Оберіть хоча б один канал", show_alert=True)
+        if next_step == "choose_channels":
+            if session["telegram"]["banner"] or session["telegram"]["reels"] or session["telegram"]["text"]:
+                session["step"] = "choose_channels"
+                await query.edit_message_text(next_text, reply_markup=channels_keyboard(session["channels"]))
+            else:
+                session["step"] = "fb_banner"
+                await query.edit_message_text("Facebook\n\nБанер буде?", reply_markup=yes_no_keyboard("fb_banner"))
             return
 
-        session["step"] = "choose_package"
+        if next_step == "after_questions":
+            await go_to_materials(query, session)
+            return
+
+        session["step"] = next_step
+        await query.edit_message_text(next_text, reply_markup=yes_no_keyboard(next_step))
+        return
+
+    if key == "channel":
+        channel_key = value
+        if channel_key in session["channels"]:
+            session["channels"].remove(channel_key)
+        else:
+            session["channels"].append(channel_key)
 
         await query.edit_message_text(
-            "Оберіть пакет публікації:",
-            reply_markup=packages_keyboard(),
+            "Оберіть Telegram канали:",
+            reply_markup=channels_keyboard(session["channels"]),
         )
+        return
 
-    elif data.startswith("package:"):
-        package_key = data.split(":", 1)[1]
-        session["package"] = package_key
+    if data == "channels_done":
+        if (session["telegram"]["banner"] or session["telegram"]["reels"] or session["telegram"]["text"]) and not session["channels"]:
+            await query.answer("Оберіть хоча б один Telegram канал", show_alert=True)
+            return
 
-        if package_key == "single":
+        session["step"] = "fb_banner"
+        await query.edit_message_text("Facebook\n\nБанер буде?", reply_markup=yes_no_keyboard("fb_banner"))
+        return
+
+    if key == "package":
+        session["package"] = value
+
+        if value == "single":
+            session["days"] = 1
             await query.edit_message_text("⏳ Публікую зараз...")
             success, failed = await send_publication(context, session)
             await query.message.reply_text(make_result(success, failed))
             sessions.pop(user_id, None)
         else:
-            await schedule_posts(context, query, user_id, session)
+            session["step"] = "choose_days"
+            await query.edit_message_text("На скільки днів публікувати?", reply_markup=days_keyboard())
+        return
+
+    if key == "days":
+        session["days"] = int(value)
+        await schedule_posts(context, query, user_id, session)
+        return
+
+
+async def go_to_materials(query, session):
+    need_banner = session["telegram"]["banner"] or session["facebook"]["banner"] or session["instagram"]["banner"]
+    need_reels = session["telegram"]["reels"] or session["facebook"]["reels"] or session["instagram"]["reels"]
+    need_text = session["telegram"]["text"] or session["facebook"]["text"]
+
+    if not need_banner and not need_reels and not need_text:
+        await query.edit_message_text("❌ Нічого не вибрано для публікації. Натисніть /start заново.")
+        return
+
+    if need_banner:
+        session["step"] = "wait_banner"
+        await query.edit_message_text("Надішліть банер / фото.")
+    elif need_reels:
+        session["step"] = "wait_reels"
+        await query.edit_message_text("Надішліть Reels / відео.")
+    elif need_text:
+        session["step"] = "wait_text"
+        await query.edit_message_text("Надішліть текст публікації.")
+    else:
+        session["step"] = "choose_package"
+        await query.edit_message_text("Оберіть пакет публікації:", reply_markup=packages_keyboard())
 
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,26 +258,46 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     session = sessions.get(user_id)
 
-    if not session or session.get("step") != "wait_media":
+    if not session:
         await update.message.reply_text("Натисніть /start для нової публікації.")
         return
 
-    if update.message.photo:
-        session["file_id"] = update.message.photo[-1].file_id
-        session["media_type"] = "photo"
-    elif update.message.video:
-        session["file_id"] = update.message.video.file_id
-        session["media_type"] = "video"
-    else:
-        await update.message.reply_text("Надішліть саме фото або відео.")
+    step = session.get("step")
+
+    if step == "wait_banner":
+        if not update.message.photo:
+            await update.message.reply_text("Надішліть саме фото / банер.")
+            return
+
+        session["banner_file_id"] = update.message.photo[-1].file_id
+
+        if session["telegram"]["reels"] or session["facebook"]["reels"] or session["instagram"]["reels"]:
+            session["step"] = "wait_reels"
+            await update.message.reply_text("✅ Банер отримано.\n\nНадішліть Reels / відео.")
+        elif session["telegram"]["text"] or session["facebook"]["text"]:
+            session["step"] = "wait_text"
+            await update.message.reply_text("✅ Банер отримано.\n\nНадішліть текст публікації.")
+        else:
+            session["step"] = "choose_package"
+            await update.message.reply_text("✅ Банер отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
         return
 
-    session["step"] = "ask_text"
+    if step == "wait_reels":
+        if not update.message.video:
+            await update.message.reply_text("Надішліть саме відео / Reels.")
+            return
 
-    await update.message.reply_text(
-        "✅ Фото/відео отримано.\n\nТекст буде?",
-        reply_markup=yes_no_keyboard("text"),
-    )
+        session["reels_file_id"] = update.message.video.file_id
+
+        if session["telegram"]["text"] or session["facebook"]["text"]:
+            session["step"] = "wait_text"
+            await update.message.reply_text("✅ Reels отримано.\n\nНадішліть текст публікації.")
+        else:
+            session["step"] = "choose_package"
+            await update.message.reply_text("✅ Reels отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
+        return
+
+    await update.message.reply_text("Зараз бот не очікує медіа. Натисніть /start для нової публікації.")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -238,49 +312,174 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     session["text"] = update.message.text or ""
-    session["step"] = "choose_channels"
+    session["step"] = "choose_package"
 
     await update.message.reply_text(
-        "✅ Текст отримано.\n\nОберіть канали:",
-        reply_markup=channels_keyboard(session["channels"]),
+        "✅ Текст отримано.\n\nОберіть пакет:",
+        reply_markup=packages_keyboard(),
     )
+
+
+async def telegram_file_url(context: ContextTypes.DEFAULT_TYPE, file_id: str):
+    tg_file = await context.bot.get_file(file_id)
+    return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{tg_file.file_path}"
+
+
+def graph_post(endpoint, data):
+    data["access_token"] = PAGE_ACCESS_TOKEN
+    response = requests.post(f"{GRAPH_URL}/{endpoint}", data=data, timeout=120)
+    payload = response.json()
+    if response.status_code >= 400 or "error" in payload:
+        raise RuntimeError(payload)
+    return payload
+
+
+def publish_facebook_text(text):
+    if not text:
+        return
+    return graph_post(f"{FB_PAGE_ID}/feed", {"message": text})
+
+
+def publish_facebook_photo(image_url, caption):
+    return graph_post(f"{FB_PAGE_ID}/photos", {
+        "url": image_url,
+        "caption": caption or "",
+    })
+
+
+def publish_facebook_video(video_url, description):
+    return graph_post(f"{FB_PAGE_ID}/videos", {
+        "file_url": video_url,
+        "description": description or "",
+    })
+
+
+def publish_instagram_photo(image_url, caption):
+    create = graph_post(f"{IG_USER_ID}/media", {
+        "image_url": image_url,
+        "caption": caption or "",
+    })
+    creation_id = create["id"]
+
+    publish = graph_post(f"{IG_USER_ID}/media_publish", {
+        "creation_id": creation_id,
+    })
+    return publish
+
+
+def publish_instagram_reels(video_url, caption):
+    create = graph_post(f"{IG_USER_ID}/media", {
+        "media_type": "REELS",
+        "video_url": video_url,
+        "caption": caption or "",
+    })
+    creation_id = create["id"]
+
+    for _ in range(30):
+        check = requests.get(
+            f"{GRAPH_URL}/{creation_id}",
+            params={
+                "fields": "status_code",
+                "access_token": PAGE_ACCESS_TOKEN,
+            },
+            timeout=60,
+        ).json()
+
+        if check.get("status_code") == "FINISHED":
+            break
+
+        if check.get("status_code") == "ERROR":
+            raise RuntimeError(check)
+
+        time_module.sleep(5)
+
+    publish = graph_post(f"{IG_USER_ID}/media_publish", {
+        "creation_id": creation_id,
+    })
+    return publish
 
 
 async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
     success = []
     failed = []
 
-    for key in session["channels"]:
-        name, chat = CHANNELS[key]
+    text = session.get("text") or ""
 
-        try:
-            if session["file_id"]:
-                if session["media_type"] == "photo":
+    banner_url = None
+    reels_url = None
+
+    try:
+        if session.get("banner_file_id"):
+            banner_url = await telegram_file_url(context, session["banner_file_id"])
+
+        if session.get("reels_file_id"):
+            reels_url = await telegram_file_url(context, session["reels_file_id"])
+    except Exception as e:
+        failed.append(f"Telegram file URL: {e}")
+
+    # Telegram
+    if session["telegram"]["banner"] or session["telegram"]["reels"] or session["telegram"]["text"]:
+        for key in session["channels"]:
+            name, chat = CHANNELS[key]
+            try:
+                if session["telegram"]["banner"] and session.get("banner_file_id"):
                     await context.bot.send_photo(
                         chat_id=chat,
-                        photo=session["file_id"],
-                        caption=session["text"] or None,
+                        photo=session["banner_file_id"],
+                        caption=text if session["telegram"]["text"] else None,
                     )
-                else:
+                    success.append(f"{chat}: банер")
+
+                if session["telegram"]["reels"] and session.get("reels_file_id"):
                     await context.bot.send_video(
                         chat_id=chat,
-                        video=session["file_id"],
-                        caption=session["text"] or None,
+                        video=session["reels_file_id"],
+                        caption=text if session["telegram"]["text"] and not session["telegram"]["banner"] else None,
                     )
-            else:
-                if not session["text"]:
-                    failed.append(f"{chat}: немає ні фото/відео, ні тексту")
-                    continue
+                    success.append(f"{chat}: Reels")
 
-                await context.bot.send_message(
-                    chat_id=chat,
-                    text=session["text"],
-                )
+                if session["telegram"]["text"] and text and not session["telegram"]["banner"] and not session["telegram"]["reels"]:
+                    await context.bot.send_message(chat_id=chat, text=text)
+                    success.append(f"{chat}: текст")
 
-            success.append(chat)
+            except Exception as e:
+                failed.append(f"{chat}: {e}")
+
+    # Facebook
+    if FB_PAGE_ID and PAGE_ACCESS_TOKEN:
+        try:
+            if session["facebook"]["banner"] and banner_url:
+                await asyncio.to_thread(publish_facebook_photo, banner_url, text if session["facebook"]["text"] else "")
+                success.append("Facebook: банер")
+
+            if session["facebook"]["reels"] and reels_url:
+                await asyncio.to_thread(publish_facebook_video, reels_url, text if session["facebook"]["text"] else "")
+                success.append("Facebook: Reels/відео")
+
+            if session["facebook"]["text"] and text and not session["facebook"]["banner"] and not session["facebook"]["reels"]:
+                await asyncio.to_thread(publish_facebook_text, text)
+                success.append("Facebook: текст")
 
         except Exception as e:
-            failed.append(f"{chat}: {e}")
+            failed.append(f"Facebook: {e}")
+    elif session["facebook"]["banner"] or session["facebook"]["reels"] or session["facebook"]["text"]:
+        failed.append("Facebook: немає FB_PAGE_ID або PAGE_ACCESS_TOKEN")
+
+    # Instagram
+    if IG_USER_ID and PAGE_ACCESS_TOKEN:
+        try:
+            if session["instagram"]["banner"] and banner_url:
+                await asyncio.to_thread(publish_instagram_photo, banner_url, text)
+                success.append("Instagram: банер")
+
+            if session["instagram"]["reels"] and reels_url:
+                await asyncio.to_thread(publish_instagram_reels, reels_url, text)
+                success.append("Instagram: Reels")
+
+        except Exception as e:
+            failed.append(f"Instagram: {e}")
+    elif session["instagram"]["banner"] or session["instagram"]["reels"]:
+        failed.append("Instagram: немає IG_USER_ID або PAGE_ACCESS_TOKEN")
 
     return success, failed
 
@@ -300,23 +499,37 @@ def make_result(success, failed):
 async def schedule_posts(context, query, user_id, session):
     package_name, times = PACKAGES[session["package"]]
     saved_session = deepcopy(session)
+    days = int(session.get("days", 1))
 
-    for t in times:
-        hour, minute = map(int, t.split(":"))
+    now = datetime.now(KYIV_TZ)
+    count = 0
 
-        context.job_queue.run_daily(
-            scheduled_publish,
-            time=time(hour=hour, minute=minute, tzinfo=KYIV_TZ),
-            data=deepcopy(saved_session),
-            name=f"{user_id}_{session['package']}_{t}",
-        )
+    for day_offset in range(days):
+        for t in times:
+            hour, minute = map(int, t.split(":"))
+            run_date = (now + timedelta(days=day_offset)).replace(
+                hour=hour,
+                minute=minute,
+                second=0,
+                microsecond=0,
+            )
 
-    channels_text = "\n".join(CHANNELS[key][1] for key in session["channels"])
+            if run_date <= now:
+                run_date += timedelta(days=1)
+
+            context.job_queue.run_once(
+                scheduled_publish,
+                when=run_date,
+                data=deepcopy(saved_session),
+                name=f"{user_id}_{session['package']}_{day_offset}_{t}",
+            )
+            count += 1
 
     await query.edit_message_text(
         f"✅ Публікацію заплановано\n\n"
-        f"Пакет: {package_name}\n\n"
-        f"Канали:\n{channels_text}\n\n"
+        f"Пакет: {package_name}\n"
+        f"Днів: {days}\n"
+        f"Публікацій на платформу: {count}\n\n"
         f"Час:\n" + "\n".join(times)
     )
 
