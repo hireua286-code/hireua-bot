@@ -322,7 +322,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def telegram_file_url(context: ContextTypes.DEFAULT_TYPE, file_id: str):
     tg_file = await context.bot.get_file(file_id)
-    return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{tg_file.file_path}"
+    file_path = tg_file.file_path
+
+    if file_path.startswith("http://") or file_path.startswith("https://"):
+        return file_path
+
+    return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
 
 
 def graph_post(endpoint, data):
@@ -361,10 +366,9 @@ def publish_instagram_photo(image_url, caption):
     })
     creation_id = create["id"]
 
-    publish = graph_post(f"{IG_USER_ID}/media_publish", {
+    return graph_post(f"{IG_USER_ID}/media_publish", {
         "creation_id": creation_id,
     })
-    return publish
 
 
 def publish_instagram_reels(video_url, caption):
@@ -393,10 +397,9 @@ def publish_instagram_reels(video_url, caption):
 
         time_module.sleep(5)
 
-    publish = graph_post(f"{IG_USER_ID}/media_publish", {
+    return graph_post(f"{IG_USER_ID}/media_publish", {
         "creation_id": creation_id,
     })
-    return publish
 
 
 async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
@@ -417,7 +420,6 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
     except Exception as e:
         failed.append(f"Telegram file URL: {e}")
 
-    # Telegram
     if session["telegram"]["banner"] or session["telegram"]["reels"] or session["telegram"]["text"]:
         for key in session["channels"]:
             name, chat = CHANNELS[key]
@@ -445,7 +447,6 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
             except Exception as e:
                 failed.append(f"{chat}: {e}")
 
-    # Facebook
     if FB_PAGE_ID and PAGE_ACCESS_TOKEN:
         try:
             if session["facebook"]["banner"] and banner_url:
@@ -465,7 +466,6 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
     elif session["facebook"]["banner"] or session["facebook"]["reels"] or session["facebook"]["text"]:
         failed.append("Facebook: немає FB_PAGE_ID або PAGE_ACCESS_TOKEN")
 
-    # Instagram
     if IG_USER_ID and PAGE_ACCESS_TOKEN:
         try:
             if session["instagram"]["banner"] and banner_url:
