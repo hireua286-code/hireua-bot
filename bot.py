@@ -2,8 +2,9 @@ import os
 import asyncio
 import threading
 import time as time_module
+import tempfile
 from copy import deepcopy
-from datetime import time, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytz
 import requests
@@ -18,12 +19,24 @@ from telegram.ext import (
     filters,
 )
 
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleRequest
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 IG_USER_ID = os.getenv("IG_USER_ID")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+
+YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
+YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
+YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
+YOUTUBE_PRIVACY_STATUS = os.getenv("YOUTUBE_PRIVACY_STATUS", "public")
+YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 GRAPH_URL = "https://graph.facebook.com/v25.0"
@@ -66,6 +79,7 @@ def new_session():
         "telegram": {"banner": False, "reels": False, "text": False, "promote": False},
         "facebook": {"banner": False, "reels": False, "text": False, "promote": False},
         "instagram": {"banner": False, "reels": False, "promote": False},
+        "youtube": {"reels": False},
         "channels": [],
         "banner_file_id": None,
         "reels_file_id": None,
@@ -162,7 +176,9 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         "ig_banner": ("instagram", "banner", "Instagram\n\nReels буде?", "ig_reels"),
         "ig_reels": ("instagram", "reels", "Instagram\n\nПросувати буде?", "ig_promote"),
-        "ig_promote": ("instagram", "promote", "Перевіряю, які матеріали потрібні...", "after_questions"),
+        "ig_promote": ("instagram", "promote", "YouTube Shorts\n\nВідео буде?", "yt_reels"),
+
+        "yt_reels": ("youtube", "reels", "Перевіряю, які матеріали потрібні...", "after_questions"),
     }
 
     if key in steps:
@@ -193,10 +209,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             session["channels"].append(channel_key)
 
-        await query.edit_message_text(
-            "Оберіть Telegram канали:",
-            reply_markup=channels_keyboard(session["channels"]),
-        )
+        await query.edit_message_text("Оберіть Telegram канали:", reply_markup=channels_keyboard(session["channels"]))
         return
 
     if data == "channels_done":
@@ -230,7 +243,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def go_to_materials(query, session):
     need_banner = session["telegram"]["banner"] or session["facebook"]["banner"] or session["instagram"]["banner"]
-    need_reels = session["telegram"]["reels"] or session["facebook"]["reels"] or session["instagram"]["reels"]
+    need_reels = (
+        session["telegram"]["reels"]
+        or session["facebook"]["reels"]
+        or session["instagram"]["reels"]
+        or session["youtube"]["reels"]
+    )
     need_text = session["telegram"]["text"] or session["facebook"]["text"]
 
     if not need_banner and not need_reels and not need_text:
@@ -271,7 +289,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         session["banner_file_id"] = update.message.photo[-1].file_id
 
-        if session["telegram"]["reels"] or session["facebook"]["reels"] or session["instagram"]["reels"]:
+        if (
+            session["telegram"]["reels"]
+            or session["facebook"]["reels"]
+            or session["instagram"]["reels"]
+            or session["youtube"]["reels"]
+        ):
             session["step"] = "wait_reels"
             await update.message.reply_text("✅ Банер отримано.\n\nНадішліть Reels / відео.")
         elif session["telegram"]["text"] or session["facebook"]["text"]:
@@ -314,10 +337,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session["text"] = update.message.text or ""
     session["step"] = "choose_package"
 
-    await update.message.reply_text(
-        "✅ Текст отримано.\n\nОберіть пакет:",
-        reply_markup=packages_keyboard(),
-    )
+    await update.message.reply_text("✅ Текст отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
 
 
 async def telegram_file_url(context: ContextTypes.DEFAULT_TYPE, file_id: str):
@@ -328,6 +348,17 @@ async def telegram_file_url(context: ContextTypes.DEFAULT_TYPE, file_id: str):
         return file_path
 
     return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+
+
+async def download_telegram_video_to_temp(context: ContextTypes.DEFAULT_TYPE, file_id: str):
+    tg_file = await context.bot.get_file(file_id)
+
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    temp_path = temp_file.name
+    temp_file.close()
+
+    await tg_file.download_to_drive(temp_path)
+    return temp_path
 
 
 def graph_post(endpoint, data):
@@ -352,26 +383,17 @@ def publish_facebook_text(text):
 
 
 def publish_facebook_photo(image_url, caption):
-    return graph_post(f"{FB_PAGE_ID}/photos", {
-        "url": image_url,
-        "caption": caption or "",
-    })
+    return graph_post(f"{FB_PAGE_ID}/photos", {"url": image_url, "caption": caption or ""})
 
 
 def publish_facebook_video(video_url, description):
-    return graph_post(f"{FB_PAGE_ID}/videos", {
-        "file_url": video_url,
-        "description": description or "",
-    })
+    return graph_post(f"{FB_PAGE_ID}/videos", {"file_url": video_url, "description": description or ""})
 
 
 def get_instagram_media_status(creation_id):
     response = requests.get(
         f"{GRAPH_URL}/{creation_id}",
-        params={
-            "fields": "status_code",
-            "access_token": PAGE_ACCESS_TOKEN,
-        },
+        params={"fields": "status_code", "access_token": PAGE_ACCESS_TOKEN},
         timeout=60,
     )
 
@@ -396,10 +418,7 @@ def wait_instagram_media_ready(creation_id, max_attempts=60, delay=5):
         last_response = check
         last_status = check.get("status_code")
 
-        print(
-            f"Instagram media status attempt {attempt}/{max_attempts}: {last_status}",
-            flush=True,
-        )
+        print(f"Instagram media status attempt {attempt}/{max_attempts}: {last_status}", flush=True)
 
         if last_status == "FINISHED":
             return True
@@ -426,15 +445,21 @@ def is_media_not_ready_error(error_text):
     )
 
 
+def is_instagram_action_blocked_but_maybe_published(error_text):
+    return (
+        "2207051" in error_text
+        or "Application request limit reached" in error_text
+        or "Действие заблокировано" in error_text
+    )
+
+
 def instagram_publish_with_retry(creation_id, attempts=5, delay=20):
     last_error = None
 
     for attempt in range(1, attempts + 1):
         try:
             print(f"Instagram publish attempt {attempt}/{attempts}", flush=True)
-            return graph_post(f"{IG_USER_ID}/media_publish", {
-                "creation_id": creation_id,
-            })
+            return graph_post(f"{IG_USER_ID}/media_publish", {"creation_id": creation_id})
         except Exception as e:
             last_error = e
             error_text = str(e)
@@ -453,10 +478,7 @@ def instagram_publish_with_retry(creation_id, attempts=5, delay=20):
 def publish_instagram_photo(image_url, caption):
     print("Instagram photo: creating media container", flush=True)
 
-    create = graph_post(f"{IG_USER_ID}/media", {
-        "image_url": image_url,
-        "caption": caption or "",
-    })
+    create = graph_post(f"{IG_USER_ID}/media", {"image_url": image_url, "caption": caption or ""})
 
     creation_id = create["id"]
     print(f"Instagram photo creation_id: {creation_id}", flush=True)
@@ -485,6 +507,79 @@ def publish_instagram_reels(video_url, caption):
     wait_instagram_media_ready(creation_id, max_attempts=90, delay=5)
 
     return instagram_publish_with_retry(creation_id, attempts=5, delay=30)
+
+
+def youtube_available():
+    return bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN)
+
+
+def get_youtube_service():
+    creds = Credentials(
+        token=None,
+        refresh_token=YOUTUBE_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=YOUTUBE_CLIENT_ID,
+        client_secret=YOUTUBE_CLIENT_SECRET,
+        scopes=[YOUTUBE_UPLOAD_SCOPE],
+    )
+
+    creds.refresh(GoogleRequest())
+    return build("youtube", "v3", credentials=creds)
+
+
+def make_youtube_title(text):
+    title = (text or "").strip().split("\n")[0].strip()
+
+    if not title:
+        title = "HireUA Shorts"
+
+    if len(title) > 90:
+        title = title[:90].strip()
+
+    if "#Shorts" not in title:
+        title = f"{title} #Shorts"
+
+    return title
+
+
+def make_youtube_description(text):
+    description = text or ""
+
+    if "#Shorts" not in description:
+        description += "\n\n#Shorts #HireUA #Робота #Вакансії"
+
+    return description.strip()
+
+
+def publish_youtube_short(video_path, text):
+    youtube = get_youtube_service()
+
+    body = {
+        "snippet": {
+            "title": make_youtube_title(text),
+            "description": make_youtube_description(text),
+            "categoryId": "22",
+        },
+        "status": {
+            "privacyStatus": YOUTUBE_PRIVACY_STATUS,
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/*")
+
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body=body,
+        media_body=media,
+    )
+
+    response = None
+
+    while response is None:
+        status, response = request.next_chunk()
+
+    return response
 
 
 async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
@@ -535,11 +630,19 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
     if FB_PAGE_ID and PAGE_ACCESS_TOKEN:
         try:
             if session["facebook"]["banner"] and banner_url:
-                await asyncio.to_thread(publish_facebook_photo, banner_url, text if session["facebook"]["text"] else "")
+                await asyncio.to_thread(
+                    publish_facebook_photo,
+                    banner_url,
+                    text if session["facebook"]["text"] else "",
+                )
                 success.append("Facebook: банер")
 
             if session["facebook"]["reels"] and reels_url:
-                await asyncio.to_thread(publish_facebook_video, reels_url, text if session["facebook"]["text"] else "")
+                await asyncio.to_thread(
+                    publish_facebook_video,
+                    reels_url,
+                    text if session["facebook"]["text"] else "",
+                )
                 success.append("Facebook: Reels/відео")
 
             if session["facebook"]["text"] and text and not session["facebook"]["banner"] and not session["facebook"]["reels"]:
@@ -562,9 +665,32 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
                 success.append("Instagram: Reels")
 
         except Exception as e:
-            failed.append(f"Instagram: {e}")
+            error_text = str(e)
+
+            if is_instagram_action_blocked_but_maybe_published(error_text):
+                success.append("Instagram: можливо опубліковано, перевір акаунт")
+            else:
+                failed.append(f"Instagram: {e}")
     elif session["instagram"]["banner"] or session["instagram"]["reels"]:
         failed.append("Instagram: немає IG_USER_ID або PAGE_ACCESS_TOKEN")
+
+    if session.get("youtube", {}).get("reels"):
+        if not session.get("reels_file_id"):
+            failed.append("YouTube: немає відео / Reels")
+        elif not youtube_available():
+            failed.append("YouTube: немає YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET або YOUTUBE_REFRESH_TOKEN")
+        else:
+            video_path = None
+
+            try:
+                video_path = await download_telegram_video_to_temp(context, session["reels_file_id"])
+                await asyncio.to_thread(publish_youtube_short, video_path, text)
+                success.append("YouTube: Shorts")
+            except Exception as e:
+                failed.append(f"YouTube: {e}")
+            finally:
+                if video_path and os.path.exists(video_path):
+                    os.remove(video_path)
 
     return success, failed
 
