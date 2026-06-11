@@ -1,4 +1,6 @@
 import os
+
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 import asyncio
 import threading
 import time as time_module
