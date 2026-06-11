@@ -88,8 +88,8 @@ def youtube_auth():
         },
         scopes=[YOUTUBE_UPLOAD_SCOPE],
     )
-
-    flow.redirect_uri = redirect_uri
+flow.code_verifier = "hireua_youtube_code_verifier_123456789012345678901234567890"
+flow.redirect_uri = redirect_uri
 
     auth_url, _ = flow.authorization_url(
         access_type="offline",
@@ -119,8 +119,8 @@ def youtube_callback():
         },
         scopes=[YOUTUBE_UPLOAD_SCOPE],
     )
-
-    flow.redirect_uri = redirect_uri
+flow.code_verifier = "hireua_youtube_code_verifier_123456789012345678901234567890"
+flow.redirect_uri = redirect_uri
     flow.fetch_token(authorization_response=request.url)
 
     refresh_token = flow.credentials.refresh_token
