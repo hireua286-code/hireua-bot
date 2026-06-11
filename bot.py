@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import pytz
 import requests
-from flask import Flask
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -19,6 +19,7 @@ from telegram.ext import (
     filters,
 )
 
+from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
@@ -37,6 +38,8 @@ YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 YOUTUBE_PRIVACY_STATUS = os.getenv("YOUTUBE_PRIVACY_STATUS", "public")
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+
+BASE_URL = os.getenv("BASE_URL", "https://hireua-bot.onrender.com")
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 GRAPH_URL = "https://graph.facebook.com/v25.0"
@@ -62,6 +65,68 @@ web_app = Flask(__name__)
 @web_app.route("/")
 def home():
     return "HireUA bot is running"
+
+
+@web_app.route("/youtube-auth")
+def youtube_auth():
+    if not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET:
+        return "Missing YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET", 500
+
+    redirect_uri = f"{BASE_URL}/youtube-callback"
+
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": YOUTUBE_CLIENT_ID,
+                "client_secret": YOUTUBE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [redirect_uri],
+            }
+        },
+        scopes=[YOUTUBE_UPLOAD_SCOPE],
+    )
+
+    flow.redirect_uri = redirect_uri
+
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+        include_granted_scopes="true",
+    )
+
+    return f'<h2>YouTube Authorization</h2><a href="{auth_url}">Authorize YouTube</a>'
+
+
+@web_app.route("/youtube-callback")
+def youtube_callback():
+    if not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET:
+        return "Missing YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET", 500
+
+    redirect_uri = f"{BASE_URL}/youtube-callback"
+
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": YOUTUBE_CLIENT_ID,
+                "client_secret": YOUTUBE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [redirect_uri],
+            }
+        },
+        scopes=[YOUTUBE_UPLOAD_SCOPE],
+    )
+
+    flow.redirect_uri = redirect_uri
+    flow.fetch_token(authorization_response=request.url)
+
+    refresh_token = flow.credentials.refresh_token
+
+    return f"""
+    <h2>Скопируй этот YOUTUBE_REFRESH_TOKEN</h2>
+    <textarea style="width:100%;height:140px;font-size:16px;">{refresh_token}</textarea>
+    """
 
 
 def run_web():
@@ -168,16 +233,13 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "tg_reels": ("telegram", "reels", "Telegram канали\n\nТекст буде?", "tg_text"),
         "tg_text": ("telegram", "text", "Telegram канали\n\nПросувати буде?", "tg_promote"),
         "tg_promote": ("telegram", "promote", "Оберіть Telegram канали:", "choose_channels"),
-
         "fb_banner": ("facebook", "banner", "Facebook\n\nReels буде?", "fb_reels"),
         "fb_reels": ("facebook", "reels", "Facebook\n\nТекст буде?", "fb_text"),
         "fb_text": ("facebook", "text", "Facebook\n\nПросувати буде?", "fb_promote"),
         "fb_promote": ("facebook", "promote", "Instagram\n\nБанер буде?", "ig_banner"),
-
         "ig_banner": ("instagram", "banner", "Instagram\n\nReels буде?", "ig_reels"),
         "ig_reels": ("instagram", "reels", "Instagram\n\nПросувати буде?", "ig_promote"),
         "ig_promote": ("instagram", "promote", "YouTube Shorts\n\nВідео буде?", "yt_reels"),
-
         "yt_reels": ("youtube", "reels", "Перевіряю, які матеріали потрібні...", "after_questions"),
     }
 
@@ -289,12 +351,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         session["banner_file_id"] = update.message.photo[-1].file_id
 
-        if (
-            session["telegram"]["reels"]
-            or session["facebook"]["reels"]
-            or session["instagram"]["reels"]
-            or session["youtube"]["reels"]
-        ):
+        if session["telegram"]["reels"] or session["facebook"]["reels"] or session["instagram"]["reels"] or session["youtube"]["reels"]:
             session["step"] = "wait_reels"
             await update.message.reply_text("✅ Банер отримано.\n\nНадішліть Reels / відео.")
         elif session["telegram"]["text"] or session["facebook"]["text"]:
@@ -397,10 +454,7 @@ def get_instagram_media_status(creation_id):
         timeout=60,
     )
 
-    try:
-        payload = response.json()
-    except Exception:
-        raise RuntimeError(f"Instagram status returned non-JSON response: {response.text}")
+    payload = response.json()
 
     if response.status_code >= 400 or "error" in payload:
         raise RuntimeError(payload)
@@ -476,23 +530,16 @@ def instagram_publish_with_retry(creation_id, attempts=5, delay=20):
 
 
 def publish_instagram_photo(image_url, caption):
-    print("Instagram photo: creating media container", flush=True)
-
     create = graph_post(f"{IG_USER_ID}/media", {"image_url": image_url, "caption": caption or ""})
-
     creation_id = create["id"]
-    print(f"Instagram photo creation_id: {creation_id}", flush=True)
 
     time_module.sleep(20)
-
     wait_instagram_media_ready(creation_id, max_attempts=60, delay=5)
 
     return instagram_publish_with_retry(creation_id, attempts=5, delay=20)
 
 
 def publish_instagram_reels(video_url, caption):
-    print("Instagram reels: creating media container", flush=True)
-
     create = graph_post(f"{IG_USER_ID}/media", {
         "media_type": "REELS",
         "video_url": video_url,
@@ -500,10 +547,8 @@ def publish_instagram_reels(video_url, caption):
     })
 
     creation_id = create["id"]
-    print(f"Instagram reels creation_id: {creation_id}", flush=True)
 
     time_module.sleep(30)
-
     wait_instagram_media_ready(creation_id, max_attempts=90, delay=5)
 
     return instagram_publish_with_retry(creation_id, attempts=5, delay=30)
@@ -568,7 +613,7 @@ def publish_youtube_short(video_path, text):
 
     media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/*")
 
-    request = youtube.videos().insert(
+    request_upload = youtube.videos().insert(
         part="snippet,status",
         body=body,
         media_body=media,
@@ -577,7 +622,7 @@ def publish_youtube_short(video_path, text):
     response = None
 
     while response is None:
-        status, response = request.next_chunk()
+        status, response = request_upload.next_chunk()
 
     return response
 
@@ -630,19 +675,11 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
     if FB_PAGE_ID and PAGE_ACCESS_TOKEN:
         try:
             if session["facebook"]["banner"] and banner_url:
-                await asyncio.to_thread(
-                    publish_facebook_photo,
-                    banner_url,
-                    text if session["facebook"]["text"] else "",
-                )
+                await asyncio.to_thread(publish_facebook_photo, banner_url, text if session["facebook"]["text"] else "")
                 success.append("Facebook: банер")
 
             if session["facebook"]["reels"] and reels_url:
-                await asyncio.to_thread(
-                    publish_facebook_video,
-                    reels_url,
-                    text if session["facebook"]["text"] else "",
-                )
+                await asyncio.to_thread(publish_facebook_video, reels_url, text if session["facebook"]["text"] else "")
                 success.append("Facebook: Reels/відео")
 
             if session["facebook"]["text"] and text and not session["facebook"]["banner"] and not session["facebook"]["reels"]:
