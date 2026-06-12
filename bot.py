@@ -197,7 +197,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👨‍💼 Розмістити вакансію", callback_data="client_vacancy")],
         [InlineKeyboardButton("👷 Додати резюме", callback_data="client_resume")],
         [InlineKeyboardButton("📢 Просування бізнесу", callback_data="client_promo")],
-        [InlineKeyboardButton("📞 Контакти", callback_data="contacts")],
+        [InlineKeyboardButton("📞 Контакти", callback_data="client_contacts")],
     ])
 
     caption = (
