@@ -201,10 +201,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
 
     caption = (
-        "👋 Вітаю!\n\n"
-        "Я Тім — помічник HireUA.\n\n"
-        "Оберіть потрібний розділ нижче 👇"
-    )
+    "👋 Вітаю!\n\n"
+    "Я Тім AI — ваш помічник у сервісі HireUA.\n\n"
+    "🤖 Тім AI: @HireUA_AI_bot\n"
+    "👨‍💼 HR менеджер: @HireUkraine\n\n"
+    "Допомагаю роботодавцям знаходити працівників, "
+    "а пошукачам — нові можливості для роботи.\n\n"
+    "Оберіть потрібний розділ нижче 👇"
+)
 
     try:
         with open("IMG_7069.MP4", "rb") as video:
