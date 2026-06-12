@@ -238,10 +238,12 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not admin_only(update):
-                return
+            return
 
-            sessions.pop(update.effective_user.id, None)
-            await update.message.reply_text("❌ Скасовано. Натисніть /start для нової публікації.")
+        sessions.pop(update.effective_user.id, None)
+        await update.message.reply_text(
+            "❌ Скасовано. Натисніть /start для нової публікації."
+        )
 
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
