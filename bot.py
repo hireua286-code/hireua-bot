@@ -434,7 +434,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🎓 Вкажіть освіту:")
         return True
     
-return False
+    return False
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await client_form_text(update, context):
         return
