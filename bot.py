@@ -426,7 +426,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("📍 Вкажіть місто:")
         return True
-if step == "city":
+    if step == "city":
         data["city"] = text
         form["step"] = "education"
         form["data"] = data
