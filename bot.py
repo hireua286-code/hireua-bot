@@ -193,15 +193,32 @@ def days_keyboard():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not admin_only(update):
-        return
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👨‍💼 Розмістити вакансію", callback_data="client_vacancy")],
+        [InlineKeyboardButton("👷 Додати резюме", callback_data="client_resume")],
+        [InlineKeyboardButton("📢 Просування бізнесу", callback_data="client_promo")],
+        [InlineKeyboardButton("📞 Контакти", callback_data="contacts")],
+    ])
 
-    sessions[update.effective_user.id] = new_session()
-
-    await update.message.reply_text(
-        "👋 HireUA Publisher Bot працює.\n\nTelegram канали\n\nБанер буде?",
-        reply_markup=yes_no_keyboard("tg_banner"),
+    caption = (
+        "👋 Вітаю!\n\n"
+        "Я Тім — помічник HireUA.\n\n"
+        "Оберіть потрібний розділ нижче 👇"
     )
+
+    try:
+        with open("IMG_7069.MP4", "rb") as video:
+            await update.message.reply_video(
+                video=video,
+                caption=caption,
+                reply_markup=keyboard,
+                supports_streaming=True,
+            )
+    except Exception:
+        await update.message.reply_text(
+            caption,
+            reply_markup=keyboard,
+        )
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
