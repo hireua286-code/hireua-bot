@@ -224,8 +224,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=keyboard,
         )
 
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not admin_only(update):
+        return
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sessions[update.effective_user.id] = new_session()
+
+    await update.message.reply_text(
+        "Telegram канали\n\nБанер буде?",
+        reply_markup=yes_no_keyboard("tg_banner")
+    )
+    return
+    async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin_only(update):
         return
 
@@ -963,6 +973,7 @@ async def run_bot():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin))    
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(client_buttons, pattern="^(client_|vacancy_)"))
     app.add_handler(CallbackQueryHandler(buttons))
