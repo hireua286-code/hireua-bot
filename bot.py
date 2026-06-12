@@ -493,11 +493,21 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "contacts":
         data["contacts"] = text
+        form["step"] = "days"
+        form["data"] = data
+
+        await update.message.reply_text(
+            "📅 На скільки днів розміщення?\n\n1 / 3 / 7 / 14 / 30"
+        )
+        return True
+
+    if step == "days":
+        data["days"] = text
         form["data"] = data
 
         admin_text = (
             "📥 Нова вакансія\n\n"
-            f"Тариф: {form.get('tariff')}\n\n"
+            f"Тариф: {form.get('tariff')}\n"
             f"🏢 Компанія: {data.get('company')}\n"
             f"💼 Посада: {data.get('position')}\n"
             f"📍 Місто: {data.get('city')}\n"
@@ -508,7 +518,8 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 Зарплата: {data.get('salary')}\n"
             f"📝 Обов'язки: {data.get('duties')}\n"
             f"🎁 Компанія пропонує: {data.get('benefits')}\n"
-            f"📞 Контакти: {data.get('contacts')}"
+            f"📞 Контакти: {data.get('contacts')}\n"
+            f"📅 Днів розміщення: {data.get('days')}"
         )
 
         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
