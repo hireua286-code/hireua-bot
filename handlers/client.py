@@ -4,10 +4,21 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 def client_main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👨‍💼 Розмістити вакансію", callback_data="client_vacancy")],
+        [InlineKeyboardButton("🚀 Послуги та ціни", callback_data="client_prices")],
         [InlineKeyboardButton("👷 Додати резюме", callback_data="client_resume")],
         [InlineKeyboardButton("📢 Просування бізнесу", callback_data="client_promo")],
-        [InlineKeyboardButton("🚀 Послуги та ціни", callback_data="client_prices")],
         [InlineKeyboardButton("📞 Контакти", callback_data="client_contacts")],
+    ])
+
+
+def vacancy_tariff_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🆓 БЕЗКОШТОВНО", callback_data="vacancy_free")],
+        [InlineKeyboardButton("🚀 Start — 4500 грн", callback_data="vacancy_start")],
+        [InlineKeyboardButton("🚀🚀 Business — 7500 грн", callback_data="vacancy_business")],
+        [InlineKeyboardButton("🎨 Замовити банер — 500 грн", callback_data="vacancy_banner")],
+        [InlineKeyboardButton("🎥 Замовити Reels / Shorts — 800 грн", callback_data="vacancy_reels")],
+        [InlineKeyboardButton("🏠 Головне меню", callback_data="client_home")],
     ])
 
 
@@ -31,15 +42,48 @@ async def client_buttons(update, context):
 
     elif data == "client_vacancy":
         await query.message.reply_text(
-            "🆓 Текстова вакансія — безкоштовно\n\n"
-            "Вкажіть інформацію про вакансію:\n\n"
-            "🏢 Назва компанії:\n"
-            "💼 Посада:\n"
-            "📍 Місто:\n"
-            "💰 Зарплата:\n"
-            "📋 Обов'язки:\n"
-            "📞 Контакти:\n\n"
-            "Після перевірки ми розмістимо текстову вакансію у відповідному Telegram каналі HireUA.",
+            "👨‍💼 Розмістити вакансію\n\n"
+            "Оберіть тариф або послугу 👇",
+            reply_markup=vacancy_tariff_keyboard(),
+        )
+
+    elif data == "vacancy_free":
+        await query.message.reply_text(
+            "🆓 БЕЗКОШТОВНО\n\n"
+            "Починаємо заповнення вакансії.\n\n"
+            "🏢 Вкажіть назву компанії:",
+            reply_markup=back_home_keyboard(),
+        )
+
+    elif data == "vacancy_start":
+        await query.message.reply_text(
+            "🚀 Start — 4500 грн\n\n"
+            "Починаємо заповнення заявки.\n\n"
+            "🏢 Вкажіть назву компанії:",
+            reply_markup=back_home_keyboard(),
+        )
+
+    elif data == "vacancy_business":
+        await query.message.reply_text(
+            "🚀🚀 Business — 7500 грн\n\n"
+            "Починаємо заповнення заявки.\n\n"
+            "🏢 Вкажіть назву компанії:",
+            reply_markup=back_home_keyboard(),
+        )
+
+    elif data == "vacancy_banner":
+        await query.message.reply_text(
+            "🎨 Замовити банер — 500 грн\n\n"
+            "Починаємо заповнення заявки.\n\n"
+            "🏢 Вкажіть назву компанії:",
+            reply_markup=back_home_keyboard(),
+        )
+
+    elif data == "vacancy_reels":
+        await query.message.reply_text(
+            "🎥 Замовити Reels / Shorts — 800 грн\n\n"
+            "Починаємо заповнення заявки.\n\n"
+            "🏢 Вкажіть назву компанії:",
             reply_markup=back_home_keyboard(),
         )
 
@@ -49,27 +93,19 @@ async def client_buttons(update, context):
             "Вкажіть інформацію про резюме:\n\n"
             "👤 Ім'я:\n"
             "📍 Місто:\n"
+            "🛠 Спеціальність:\n"
             "💼 Бажана посада:\n"
+            "📋 Досвід роботи:\n"
             "💰 Бажана зарплата:\n"
-            "📞 Контакти:\n\n"
-            "Після перевірки ми розмістимо текстове резюме у відповідному Telegram каналі HireUA.",
+            "📞 Контакти:",
             reply_markup=back_home_keyboard(),
         )
 
     elif data == "client_promo":
         await query.message.reply_text(
             "📢 Просування бізнесу\n\n"
-            "Вкажіть інформацію для просування:\n\n"
-            "🏢 Назва компанії:\n"
-            "📍 Місто:\n"
-            "📞 Контакти:\n\n"
-            "🎯 Що потрібно просувати?\n"
-            "(компанію, вакансію, акцію, відкриття, товар або послугу)\n\n"
-            "🖼 Логотип компанії (за наявності):\n"
-            "🎨 Банер (за наявності):\n"
-            "🎬 Reels / Shorts (за наявності):\n"
-            "🔗 Сайт / соцмережі (за наявності):\n\n"
-            "📝 Опис або побажання:",
+            "Для просування компанії, акції, відкриття або бренду напишіть HR менеджеру:\n\n"
+            "👨‍💼 @HireUkraine",
             reply_markup=back_home_keyboard(),
         )
 
@@ -106,10 +142,7 @@ async def client_buttons(update, context):
             "💰 Створення контенту\n\n"
             "🎨 Банер — 500 грн\n"
             "🎥 Reels / Shorts — 800 грн\n"
-            "🤖 Відео з Тімом AI — 800 грн\n\n"
-            "📞 Замовити:\n"
-            "🤖 Тім AI: @HireUA_AI_bot\n"
-            "👨‍💼 HR менеджер: @HireUkraine",
+            "🤖 Відео з Тімом AI — 800 грн",
             reply_markup=back_home_keyboard(),
         )
 
