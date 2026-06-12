@@ -829,7 +829,7 @@ async def run_bot():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
-    app.add_handler(CallbackQueryHandler(client_buttons, pattern="^client_"))
+    app.add_handler(CallbackQueryHandler(client_buttons, pattern="^(client_|vacancy_)"))
     app.add_handler(CallbackQueryHandler(buttons))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, handle_media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
