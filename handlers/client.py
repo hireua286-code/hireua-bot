@@ -47,7 +47,7 @@ async def client_buttons(update, context):
             reply_markup=vacancy_tariff_keyboard(),
         )
 
-    elif data == "vacancy_free":
+elif data == "vacancy_free":
     context.user_data["client_form"] = {
         "type": "vacancy",
         "tariff": "БЕЗКОШТОВНО",
