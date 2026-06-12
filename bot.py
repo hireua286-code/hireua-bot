@@ -400,7 +400,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Reels отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
         return
 
-    await update.message.reply_text("Зараз бот не очікує медіа. Натисніть /start для нової публікації.")
+   await update.message.reply_text("Зараз бот не очікує медіа. Натисніть /start для нової публікації.")
+
+
 async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     form = context.user_data.get("client_form")
 
@@ -415,7 +417,6 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["company"] = text
         form["step"] = "position"
         form["data"] = data
-
         await update.message.reply_text("💼 Вкажіть посаду:")
         return True
 
@@ -423,17 +424,71 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["position"] = text
         form["step"] = "city"
         form["data"] = data
-
         await update.message.reply_text("📍 Вкажіть місто:")
         return True
+
     if step == "city":
         data["city"] = text
         form["step"] = "education"
         form["data"] = data
-
         await update.message.reply_text("🎓 Вкажіть освіту:")
         return True
-    
+
+    if step == "education":
+        data["education"] = text
+        form["step"] = "experience"
+        form["data"] = data
+        await update.message.reply_text("📋 Вкажіть досвід роботи:")
+        return True
+
+    if step == "experience":
+        data["experience"] = text
+        form["step"] = "salary"
+        form["data"] = data
+        await update.message.reply_text("💰 Вкажіть зарплату:")
+        return True
+
+    if step == "salary":
+        data["salary"] = text
+        form["step"] = "duties"
+        form["data"] = data
+        await update.message.reply_text("📝 Вкажіть обов'язки:")
+        return True
+
+    if step == "duties":
+        data["duties"] = text
+        form["step"] = "contacts"
+        form["data"] = data
+        await update.message.reply_text("📞 Вкажіть контакти:")
+        return True
+
+    if step == "contacts":
+        data["contacts"] = text
+        form["data"] = data
+
+        admin_text = (
+            "📥 Нова вакансія\n\n"
+            f"Тариф: {form.get('tariff')}\n\n"
+            f"🏢 Компанія: {data.get('company')}\n"
+            f"💼 Посада: {data.get('position')}\n"
+            f"📍 Місто: {data.get('city')}\n"
+            f"🎓 Освіта: {data.get('education')}\n"
+            f"📋 Досвід роботи: {data.get('experience')}\n"
+            f"💰 Зарплата: {data.get('salary')}\n"
+            f"📝 Обов'язки: {data.get('duties')}\n"
+            f"📞 Контакти: {data.get('contacts')}"
+        )
+
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+
+        await update.message.reply_text(
+            "✅ Заявка прийнята.\n"
+            "Ми перевіримо інформацію та зв'яжемось з вами."
+        )
+
+        context.user_data.pop("client_form", None)
+        return True
+
     return False
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await client_form_text(update, context):
