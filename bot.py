@@ -401,9 +401,37 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("Зараз бот не очікує медіа. Натисніть /start для нової публікації.")
+async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    form = context.user_data.get("client_form")
 
+    if not form:
+        return False
 
+    text = update.message.text
+    step = form.get("step")
+    data = form.get("data", {})
+
+    if step == "company":
+        data["company"] = text
+        form["step"] = "position"
+        form["data"] = data
+
+        await update.message.reply_text("💼 Вкажіть посаду:")
+        return True
+
+    if step == "position":
+        data["position"] = text
+        form["step"] = "city"
+        form["data"] = data
+
+        await update.message.reply_text("📍 Вкажіть місто:")
+        return True
+
+    return False
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await client_form_text(update, context):
+        return
+
     if not admin_only(update):
         return
 
