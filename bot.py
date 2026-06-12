@@ -434,6 +434,13 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "city":
         data["city"] = text
+        form["step"] = "address"
+        form["data"] = data
+        await update.message.reply_text("📍 Вкажіть адресу роботи:")
+        return True
+
+    if step == "address":
+        data["address"] = text
         form["step"] = "education"
         form["data"] = data
         await update.message.reply_text("🎓 Вкажіть освіту:")
@@ -448,6 +455,13 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "experience":
         data["experience"] = text
+        form["step"] = "schedule"
+        form["data"] = data
+        await update.message.reply_text("🕒 Вкажіть графік роботи:")
+        return True
+
+    if step == "schedule":
+        data["schedule"] = text
         form["step"] = "salary"
         form["data"] = data
         await update.message.reply_text("💰 Вкажіть зарплату:")
@@ -462,6 +476,16 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "duties":
         data["duties"] = text
+        form["step"] = "benefits"
+        form["data"] = data
+        await update.message.reply_text(
+            "🎁 Що пропонує компанія?\n"
+            "Наприклад: харчування, розвозка, житло, бонуси, навчання тощо."
+        )
+        return True
+
+    if step == "benefits":
+        data["benefits"] = text
         form["step"] = "contacts"
         form["data"] = data
         await update.message.reply_text("📞 Вкажіть контакти:")
@@ -477,10 +501,13 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏢 Компанія: {data.get('company')}\n"
             f"💼 Посада: {data.get('position')}\n"
             f"📍 Місто: {data.get('city')}\n"
+            f"📍 Адреса: {data.get('address')}\n"
             f"🎓 Освіта: {data.get('education')}\n"
             f"📋 Досвід роботи: {data.get('experience')}\n"
+            f"🕒 Графік роботи: {data.get('schedule')}\n"
             f"💰 Зарплата: {data.get('salary')}\n"
             f"📝 Обов'язки: {data.get('duties')}\n"
+            f"🎁 Компанія пропонує: {data.get('benefits')}\n"
             f"📞 Контакти: {data.get('contacts')}"
         )
 
@@ -495,6 +522,8 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return True
 
     return False
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await client_form_text(update, context):
         return
