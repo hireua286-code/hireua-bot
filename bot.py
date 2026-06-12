@@ -397,10 +397,15 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Reels отримано.\n\nНадішліть текст публікації.")
         else:
             session["step"] = "choose_package"
-            await update.message.reply_text("✅ Reels отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
+            await update.message.reply_text(
+                "✅ Reels отримано.\n\nОберіть пакет:", 
+                reply_markup=packages_keyboard() 
+            )
         return
 
-   await update.message.reply_text("Зараз бот не очікує медіа. Натисніть /start для нової публікації.")
+    await update.message.reply_text(
+        "Зараз бот не очікує медіа. Натисніть /start для нової публікації."
+    )
 
 
 async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
