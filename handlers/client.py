@@ -47,20 +47,20 @@ async def client_buttons(update, context):
             reply_markup=vacancy_tariff_keyboard(),
         )
 
-elif data == "vacancy_free":
-    context.user_data["client_form"] = {
-        "type": "vacancy",
-        "tariff": "БЕЗКОШТОВНО",
-        "step": "company",
-        "data": {}
-    }
+    elif data == "vacancy_free":
+        context.user_data["client_form"] = {
+            "type": "vacancy",
+            "tariff": "БЕЗКОШТОВНО",
+            "step": "company",
+            "data": {}
+        }
 
     await query.message.reply_text(
-        "🆓 БЕЗКОШТОВНО\n\n"
-        "Починаємо заповнення вакансії.\n\n"
-        "🏢 Вкажіть назву компанії:",
-        reply_markup=back_home_keyboard(),
-    )
+            "🆓 БЕЗКОШТОВНО\n\n"
+            "Починаємо заповнення вакансії.\n\n"
+            "🏢 Вкажіть назву компанії:",
+            reply_markup=back_home_keyboard(),
+        )
 
     elif data == "vacancy_start":
         await query.message.reply_text(
