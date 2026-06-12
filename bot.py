@@ -235,12 +235,13 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=yes_no_keyboard("tg_banner")
     )
     return
+    
     async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not admin_only(update):
-        return
+        if not admin_only(update):
+                return
 
-    sessions.pop(update.effective_user.id, None)
-    await update.message.reply_text("❌ Скасовано. Натисніть /start для нової публікації.")
+            sessions.pop(update.effective_user.id, None)
+            await update.message.reply_text("❌ Скасовано. Натисніть /start для нової публікації.")
 
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
