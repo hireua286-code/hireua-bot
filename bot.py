@@ -1065,11 +1065,38 @@ def publish_youtube_short(video_path, text):
     return response
 
 
+TIM_BOT_URL = "https://t.me/HireUA_AI_bot?start=menu"
+
+
+def tim_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🤖 Написати Тіму", url=TIM_BOT_URL)]
+    ])
+
+
+def add_tim_footer(text: str, platform: str = "social") -> str:
+    base = (text or "").strip()
+
+    if "HireUA_AI_bot" in base or "Написати Тіму" in base:
+        return base
+
+    if platform == "instagram":
+        footer = "🤖 Подати заявку через Telegram: @HireUA_AI_bot"
+    else:
+        footer = "🤖 Написати Тіму: https://t.me/HireUA_AI_bot"
+
+    return f"{base}\n\n{footer}" if base else footer
+
+
 async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
     success = []
     failed = []
 
     text = session.get("text") or ""
+    telegram_keyboard = tim_keyboard()
+    facebook_text = add_tim_footer(text, "facebook")
+    instagram_text = add_tim_footer(text, "instagram")
+    youtube_text = add_tim_footer(text, "youtube")
 
     banner_url = None
     reels_url = None
@@ -1092,6 +1119,7 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
                         chat_id=chat,
                         photo=session["banner_file_id"],
                         caption=text if session["telegram"]["text"] else None,
+                        reply_markup=telegram_keyboard,
                     )
                     success.append(f"{chat}: банер")
 
@@ -1100,11 +1128,16 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
                         chat_id=chat,
                         video=session["reels_file_id"],
                         caption=text if session["telegram"]["text"] and not session["telegram"]["banner"] else None,
+                        reply_markup=telegram_keyboard,
                     )
                     success.append(f"{chat}: Reels")
 
                 if session["telegram"]["text"] and text and not session["telegram"]["banner"] and not session["telegram"]["reels"]:
-                    await context.bot.send_message(chat_id=chat, text=text)
+                    await context.bot.send_message(
+                        chat_id=chat,
+                        text=text,
+                        reply_markup=telegram_keyboard,
+                    )
                     success.append(f"{chat}: текст")
 
             except Exception as e:
@@ -1113,15 +1146,15 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
     if FB_PAGE_ID and PAGE_ACCESS_TOKEN:
         try:
             if session["facebook"]["banner"] and banner_url:
-                await asyncio.to_thread(publish_facebook_photo, banner_url, text if session["facebook"]["text"] else "")
+                await asyncio.to_thread(publish_facebook_photo, banner_url, facebook_text if session["facebook"]["text"] else add_tim_footer("", "facebook"))
                 success.append("Facebook: банер")
 
             if session["facebook"]["reels"] and reels_url:
-                await asyncio.to_thread(publish_facebook_video, reels_url, text if session["facebook"]["text"] else "")
+                await asyncio.to_thread(publish_facebook_video, reels_url, facebook_text if session["facebook"]["text"] else add_tim_footer("", "facebook"))
                 success.append("Facebook: Reels/відео")
 
             if session["facebook"]["text"] and text and not session["facebook"]["banner"] and not session["facebook"]["reels"]:
-                await asyncio.to_thread(publish_facebook_text, text)
+                await asyncio.to_thread(publish_facebook_text, facebook_text)
                 success.append("Facebook: текст")
 
         except Exception as e:
@@ -1132,11 +1165,11 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
     if IG_USER_ID and PAGE_ACCESS_TOKEN:
         try:
             if session["instagram"]["banner"] and banner_url:
-                await asyncio.to_thread(publish_instagram_photo, banner_url, text)
+                await asyncio.to_thread(publish_instagram_photo, banner_url, instagram_text)
                 success.append("Instagram: банер")
 
             if session["instagram"]["reels"] and reels_url:
-                await asyncio.to_thread(publish_instagram_reels, reels_url, text)
+                await asyncio.to_thread(publish_instagram_reels, reels_url, instagram_text)
                 success.append("Instagram: Reels")
 
         except Exception as e:
@@ -1159,7 +1192,7 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
 
             try:
                 video_path = await download_telegram_video_to_temp(context, session["reels_file_id"])
-                await asyncio.to_thread(publish_youtube_short, video_path, text)
+                await asyncio.to_thread(publish_youtube_short, video_path, youtube_text)
                 success.append("YouTube: Shorts")
             except Exception as e:
                 failed.append(f"YouTube: {e}")
