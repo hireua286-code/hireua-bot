@@ -66,6 +66,134 @@ sessions = {}
 web_app = Flask(__name__)
 
 
+# ---------- CLIENT KEYBOARDS / BUTTONS ----------
+# Цей блок спеціально дублює клієнтську логіку всередині bot.py,
+# щоб Start / Business гарантовано запускали бриф vacancy_promo.
+# Адмінська публікація банерів / Reels нижче не змінюється.
+
+def client_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👨‍💼 Розмістити вакансію", callback_data="client_vacancy")],
+        [InlineKeyboardButton("👷 Додати резюме", callback_data="client_resume")],
+        [InlineKeyboardButton("📢 Реклама / Акції / Відкриття", callback_data="client_promo")],
+        [InlineKeyboardButton("💰 Тарифи / Співпраця", callback_data="client_prices")],
+        [InlineKeyboardButton("📞 Звʼязатися з HR менеджером", url="https://t.me/HireUkraine")],
+    ])
+
+
+def vacancy_tariffs_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🆓 Безкоштовна текстова вакансія", callback_data="vacancy_free")],
+        [InlineKeyboardButton("🚀 Start — просування 7 днів", callback_data="vacancy_start")],
+        [InlineKeyboardButton("💼 Business — активне просування 7 днів", callback_data="vacancy_business")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="client_back")],
+    ])
+
+
+def promo_order_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🖼 Банер", callback_data="content_banner")],
+        [InlineKeyboardButton("🎬 Reels / Shorts", callback_data="content_reels")],
+        [InlineKeyboardButton("🤖 Відео з Тімом", callback_data="content_tim_video")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="client_back")],
+    ])
+
+
+async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+
+    if data == "client_back":
+        await query.message.reply_text("Оберіть потрібний розділ нижче 👇", reply_markup=client_main_keyboard())
+        return
+
+    if data == "client_vacancy":
+        await query.message.reply_text(
+            "👨‍💼 Розміщення вакансії\n\n"
+            "Оберіть формат розміщення:",
+            reply_markup=vacancy_tariffs_keyboard(),
+        )
+        return
+
+    if data == "vacancy_free":
+        context.user_data["client_form"] = {
+            "type": "vacancy",
+            "tariff": "Безкоштовна текстова вакансія",
+            "step": "company",
+            "data": {},
+        }
+        await query.message.reply_text("🏢 Вкажіть назву компанії:")
+        return
+
+    if data == "vacancy_start":
+        context.user_data["client_form"] = {
+            "type": "vacancy_promo",
+            "tariff": "Start",
+            "step": "company",
+            "data": {},
+        }
+        await query.message.reply_text(
+            "🚀 Пакет Start\n\n"
+            "Зараз заповнимо вакансію і бриф для банера / Reels / Shorts.\n\n"
+            "🏢 Вкажіть назву компанії:"
+        )
+        return
+
+    if data == "vacancy_business":
+        context.user_data["client_form"] = {
+            "type": "vacancy_promo",
+            "tariff": "Business",
+            "step": "company",
+            "data": {},
+        }
+        await query.message.reply_text(
+            "💼 Пакет Business\n\n"
+            "Зараз заповнимо вакансію і розширений бриф для банера / Reels / Shorts.\n\n"
+            "🏢 Вкажіть назву компанії:"
+        )
+        return
+
+    if data == "client_promo":
+        await query.message.reply_text(
+            "📢 Реклама / Акції / Відкриття\n\n"
+            "Що потрібно підготувати?",
+            reply_markup=promo_order_keyboard(),
+        )
+        return
+
+    if data in ("content_banner", "content_reels", "content_tim_video"):
+        tariff_map = {
+            "content_banner": "Банер",
+            "content_reels": "Reels / Shorts",
+            "content_tim_video": "Відео з Тімом",
+        }
+        context.user_data["client_form"] = {
+            "type": "content_order",
+            "tariff": tariff_map.get(data, "Контент"),
+            "step": "content_company",
+            "data": {},
+        }
+        await query.message.reply_text("🏢 Вкажіть назву компанії / бренду:")
+        return
+
+    if data == "client_prices":
+        await query.message.reply_text(
+            "💰 Тарифи HireUA\n\n"
+            "🆓 Текстові вакансії — безкоштовно до 3 разів на добу.\n"
+            "🆓 Текстові резюме — безкоштовно до 2 разів на добу.\n\n"
+            "🖼 Банер — 300 грн / шт.\n"
+            "🎬 Reels / Shorts — 500 грн / шт.\n\n"
+            "🚀 Start — просування 7 днів.\n"
+            "💼 Business — активне просування 7 днів.\n\n"
+            "Для деталей напишіть HR менеджеру: @HireUkraine"
+        )
+        return
+
+    await query.message.reply_text("Оберіть потрібний розділ нижче 👇", reply_markup=client_main_keyboard())
+
+
 @web_app.route("/")
 def home():
     return "HireUA bot is running"
