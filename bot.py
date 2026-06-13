@@ -500,7 +500,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        with open("IMG_7069.MP4", "rb") as video:
+        with open("IMG_7069.mp4", "rb") as video:
             await update.message.reply_video(
                 video=video,
                 caption=caption,
