@@ -508,7 +508,141 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             context.user_data.pop("client_form", None)
             return True
+            
+# ---------- КОНТЕНТ / ПРОСУВАННЯ ----------
+        if form_type == "content_order":
+        if step == "content_company":
+            data["company"] = text
+            form["step"] = "content_about"
+            form["data"] = data
+            await update.message.reply_text("📋 Коротко про компанію:")
+            return True
 
+        if step == "content_about":
+            data["about"] = text
+            form["step"] = "content_goal"
+            form["data"] = data
+            await update.message.reply_text("🎯 Що просуваємо? Вакансію / акцію / відкриття / компанію / послугу:")
+            return True
+
+        if step == "content_goal":
+            data["goal"] = text
+            form["step"] = "content_city"
+            form["data"] = data
+            await update.message.reply_text("📍 Вкажіть місто:")
+            return True
+
+        if step == "content_city":
+            data["city"] = text
+            form["step"] = "content_address"
+            form["data"] = data
+            await update.message.reply_text("📍 Адреса / локація:")
+            return True
+
+        if step == "content_address":
+            data["address"] = text
+            form["step"] = "content_main_info"
+            form["data"] = data
+            await update.message.reply_text("📝 Основна інформація для реклами:")
+            return True
+
+        if step == "content_main_info":
+            data["main_info"] = text
+            form["step"] = "content_benefits"
+            form["data"] = data
+            await update.message.reply_text("🎁 Переваги / умови / зарплата / акція / знижка:")
+            return True
+
+        if step == "content_benefits":
+            data["benefits"] = text
+            form["step"] = "content_audience"
+            form["data"] = data
+            await update.message.reply_text("🎯 Цільова аудиторія? Кого хочемо залучити?")
+            return True
+
+        if step == "content_audience":
+            data["audience"] = text
+            form["step"] = "content_tim"
+            form["data"] = data
+            await update.message.reply_text("🤖 Використовувати Тіма у контенті? Так / Ні / На розсуд дизайнера")
+            return True
+
+        if step == "content_tim":
+            data["tim"] = text
+            form["step"] = "content_style"
+            form["data"] = data
+            await update.message.reply_text("🎨 Який стиль реклами? Діловий / сучасний / молодіжний / преміум / смішний")
+            return True
+
+        if step == "content_style":
+            data["style"] = text
+            form["step"] = "content_music"
+            form["data"] = data
+            await update.message.reply_text("🎵 Музика або стиль музики? Тренди / Rock / Pop / без різниці / свій варіант")
+            return True
+
+        if step == "content_music":
+            data["music"] = text
+            form["step"] = "content_urgent"
+            form["data"] = data
+            await update.message.reply_text("🔥 Терміново? Так / Ні")
+            return True
+
+        if step == "content_urgent":
+            data["urgent"] = text
+            form["step"] = "content_materials"
+            form["data"] = data
+            await update.message.reply_text("🖼 Є логотип, фото або відео матеріали? Так / Ні")
+            return True
+
+        if step == "content_materials":
+            data["materials"] = text
+            form["step"] = "content_contacts"
+            form["data"] = data
+            await update.message.reply_text("📞 Вкажіть контакти:")
+            return True
+
+        if step == "content_contacts":
+            data["contacts"] = text
+            form["step"] = "content_wishes"
+            form["data"] = data
+            await update.message.reply_text("✏️ Побажання до реклами / банера / відео:")
+            return True
+
+        if step == "content_wishes":
+            data["wishes"] = text
+            form["data"] = data
+
+            admin_text = (
+                "📥 Нове замовлення контенту\n\n"
+                f"Тариф: {form.get('tariff')}\n"
+                f"🏢 Компанія: {data.get('company')}\n"
+                f"📋 Про компанію: {data.get('about')}\n"
+                f"🎯 Що просуваємо: {data.get('goal')}\n"
+                f"📍 Місто: {data.get('city')}\n"
+                f"📍 Адреса / локація: {data.get('address')}\n"
+                f"📝 Основна інформація: {data.get('main_info')}\n"
+                f"🎁 Переваги / умови: {data.get('benefits')}\n"
+                f"🎯 Цільова аудиторія: {data.get('audience')}\n"
+                f"🤖 Тім у контенті: {data.get('tim')}\n"
+                f"🎨 Стиль: {data.get('style')}\n"
+                f"🎵 Музика: {data.get('music')}\n"
+                f"🔥 Терміново: {data.get('urgent')}\n"
+                f"🖼 Матеріали: {data.get('materials')}\n"
+                f"📞 Контакти: {data.get('contacts')}\n"
+                f"✏️ Побажання: {data.get('wishes')}"
+            )
+
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+
+            await update.message.reply_text(
+                "✅ Заявка на контент прийнята.\n"
+                "Ми перевіримо інформацію та зв'яжемось з вами."
+            )
+
+            context.user_data.pop("client_form", None)
+            return True
+            
     # ---------- ВАКАНСІЯ ----------
     if step == "company":
         data["company"] = text
