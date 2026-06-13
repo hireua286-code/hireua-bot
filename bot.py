@@ -1034,7 +1034,7 @@ async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin_only(update):
         return
 
-     await update.message.reply_text("Натисніть /start для створення нової публікації.")
+    await update.message.reply_text("Натисніть /start для створення нової публікації.")
 
 
 async def client_resume_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
