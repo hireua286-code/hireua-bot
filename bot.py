@@ -651,64 +651,64 @@ if step == "company":
         await update.message.reply_text("💼 Вкажіть посаду:")
         return True
 
-    if step == "position":
-        data["position"] = text
-        form["step"] = "city"
-        form["data"] = data
-        await update.message.reply_text("📍 Вкажіть місто:")
-        return True
+        if step == "position":
+            data["position"] = text
+            form["step"] = "city"
+            form["data"] = data
+            await update.message.reply_text("📍 Вкажіть місто:")
+            return True
 
-    if step == "city":
-        data["city"] = text
-        form["step"] = "address"
-        form["data"] = data
-        await update.message.reply_text("📍 Вкажіть адресу роботи:")
-        return True
+        if step == "city":
+            data["city"] = text
+            form["step"] = "address"
+            form["data"] = data
+            await update.message.reply_text("📍 Вкажіть адресу роботи:")
+            return True
 
-    if step == "address":
-        data["address"] = text
-        form["step"] = "education"
-        form["data"] = data
-        await update.message.reply_text("🎓 Вкажіть освіту:")
-        return True
+        if step == "address":
+            data["address"] = text
+            form["step"] = "education"
+            form["data"] = data
+            await update.message.reply_text("🎓 Вкажіть освіту:")
+            return True
 
-    if step == "education":
-        data["education"] = text
-        form["step"] = "experience"
-        form["data"] = data
-        await update.message.reply_text("📋 Вкажіть досвід роботи:")
-        return True
+        if step == "education":
+            data["education"] = text
+            form["step"] = "experience"
+            form["data"] = data
+            await update.message.reply_text("📋 Вкажіть досвід роботи:")
+            return True
 
-    if step == "experience":
-        data["experience"] = text
-        form["step"] = "schedule"
-        form["data"] = data
-        await update.message.reply_text("🕒 Вкажіть графік роботи:")
-        return True
+        if step == "experience":
+            data["experience"] = text
+            form["step"] = "schedule"
+            form["data"] = data
+            await update.message.reply_text("🕒 Вкажіть графік роботи:")
+            return True
 
-    if step == "schedule":
-        data["schedule"] = text
-        form["step"] = "salary"
-        form["data"] = data
-        await update.message.reply_text("💰 Вкажіть зарплату:")
-        return True
+        if step == "schedule":
+            data["schedule"] = text
+            form["step"] = "salary"
+            form["data"] = data
+            await update.message.reply_text("💰 Вкажіть зарплату:")
+            return True
 
-    if step == "salary":
-        data["salary"] = text
-        form["step"] = "duties"
-        form["data"] = data
-        await update.message.reply_text("📝 Вкажіть обов'язки:")
-        return True
+        if step == "salary":
+            data["salary"] = text
+            form["step"] = "duties"
+            form["data"] = data
+            await update.message.reply_text("📝 Вкажіть обов'язки:")
+            return True
 
-    if step == "duties":
-        data["duties"] = text
-        form["step"] = "benefits"
-        form["data"] = data
-        await update.message.reply_text(
-            "🎁 Що пропонує компанія?\n"
-            "Наприклад: харчування, розвозка, житло, бонуси, навчання тощо."
-        )
-        return True
+        if step == "duties":
+            data["duties"] = text
+            form["step"] = "benefits"
+            form["data"] = data
+            await update.message.reply_text(
+                "🎁 Що пропонує компанія?\n"
+                "Наприклад: харчування, розвозка, житло, бонуси, навчання тощо."
+            )
+            return True
 
     if step == "benefits":
         data["benefits"] = text
