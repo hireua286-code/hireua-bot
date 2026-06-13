@@ -1,4 +1,6 @@
 import os
+import json
+from uuid import uuid4
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
@@ -61,6 +63,17 @@ PACKAGES = {
     "start": ("Start", ["08:00", "12:00", "16:00"]),
     "business": ("Business", ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]),
 }
+
+# Автоматичні вікна публікацій.
+# Бот сам ставить публікації у найближчий вільний слот кожні 5 хвилин.
+SCHEDULE_FILE = "scheduled_posts.json"
+SLOT_WINDOWS = [
+    (8, 10),
+    (12, 14),
+    (16, 18),
+    (18, 20),
+]
+SLOT_STEP_MINUTES = 5
 
 sessions = {}
 web_app = Flask(__name__)
@@ -321,6 +334,158 @@ def days_keyboard():
         [InlineKeyboardButton("14 днів", callback_data="days:14")],
         [InlineKeyboardButton("30 днів", callback_data="days:30")],
     ])
+
+def load_schedule_entries():
+    if not os.path.exists(SCHEDULE_FILE):
+        return []
+
+    try:
+        with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+
+    if isinstance(data, list):
+        return data
+
+    return []
+
+
+def save_schedule_entries(entries):
+    tmp_file = f"{SCHEDULE_FILE}.tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(entries, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_file, SCHEDULE_FILE)
+
+
+def slot_key(dt: datetime) -> str:
+    return dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+def day_slots(day_dt: datetime):
+    day_dt = day_dt.astimezone(KYIV_TZ)
+    slots = []
+
+    for start_hour, end_hour in SLOT_WINDOWS:
+        current = day_dt.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+        end = day_dt.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+
+        while current < end:
+            slots.append(current)
+            current += timedelta(minutes=SLOT_STEP_MINUTES)
+
+    return slots
+
+
+def find_free_slots(count: int, start_from: datetime | None = None):
+    entries = load_schedule_entries()
+    used = {
+        entry.get("slot")
+        for entry in entries
+        if entry.get("status") in (None, "pending", "running") and entry.get("slot")
+    }
+
+    now = start_from or datetime.now(KYIV_TZ)
+    # Даємо боту мінімум 1 хвилину, щоб не ставити задачу в минуле.
+    earliest = now + timedelta(minutes=1)
+    free_slots = []
+
+    for day_offset in range(0, 60):
+        day_dt = now + timedelta(days=day_offset)
+
+        for slot in day_slots(day_dt):
+            key = slot_key(slot)
+
+            if slot <= earliest:
+                continue
+
+            if key in used:
+                continue
+
+            used.add(key)
+            free_slots.append(slot)
+
+            if len(free_slots) >= count:
+                return free_slots
+
+    return free_slots
+
+
+def add_schedule_entries(session: dict, slots, package_name: str):
+    entries = load_schedule_entries()
+    new_entries = []
+
+    for slot in slots:
+        entry = {
+            "id": str(uuid4()),
+            "status": "pending",
+            "slot": slot_key(slot),
+            "run_at": slot.isoformat(),
+            "package": package_name,
+            "created_at": datetime.now(KYIV_TZ).isoformat(),
+            "session": deepcopy(session),
+        }
+        entries.append(entry)
+        new_entries.append(entry)
+
+    save_schedule_entries(entries)
+    return new_entries
+
+
+def update_schedule_entry(entry_id: str, status: str, success=None, failed=None):
+    entries = load_schedule_entries()
+
+    for entry in entries:
+        if entry.get("id") == entry_id:
+            entry["status"] = status
+            entry["updated_at"] = datetime.now(KYIV_TZ).isoformat()
+
+            if success is not None:
+                entry["success"] = success
+            if failed is not None:
+                entry["failed"] = failed
+            break
+
+    save_schedule_entries(entries)
+
+
+def register_schedule_job(job_queue, entry):
+    run_at_raw = entry.get("run_at")
+    if not run_at_raw:
+        return False
+
+    try:
+        run_at = datetime.fromisoformat(run_at_raw)
+    except Exception:
+        return False
+
+    if run_at.tzinfo is None:
+        run_at = KYIV_TZ.localize(run_at)
+    else:
+        run_at = run_at.astimezone(KYIV_TZ)
+
+    now = datetime.now(KYIV_TZ)
+    when = run_at if run_at > now else now + timedelta(seconds=10)
+
+    job_queue.run_once(
+        scheduled_publish,
+        when=when,
+        data={"id": entry.get("id"), "session": entry.get("session")},
+        name=f"scheduled_{entry.get('id')}",
+    )
+    return True
+
+
+def restore_pending_schedule_jobs(job_queue):
+    restored = 0
+
+    for entry in load_schedule_entries():
+        if entry.get("status") == "pending" and entry.get("session"):
+            if register_schedule_job(job_queue, entry):
+                restored += 1
+
+    print(f"RESTORED SCHEDULED POSTS: {restored}", flush=True)
+    return restored
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1220,44 +1385,78 @@ async def schedule_posts(context, query, user_id, session):
     saved_session = deepcopy(session)
     days = int(session.get("days", 1))
 
-    now = datetime.now(KYIV_TZ)
-    count = 0
+    # Start = 3 публікації на день, Business = 6 публікацій на день.
+    # Час бот підбирає сам у вікнах 08-10, 12-14, 16-18, 18-20 кожні 5 хвилин.
+    publications_per_day = len(times)
+    total_publications = publications_per_day * days
 
-    for day_offset in range(days):
-        for t in times:
-            hour, minute = map(int, t.split(":"))
-            run_date = (now + timedelta(days=day_offset)).replace(
-                hour=hour,
-                minute=minute,
-                second=0,
-                microsecond=0,
-            )
+    slots = find_free_slots(total_publications)
 
-            if run_date <= now:
-                run_date += timedelta(days=1)
+    if len(slots) < total_publications:
+        await query.edit_message_text(
+            "⚠️ Не вдалося знайти достатньо вільних слотів на 60 днів вперед.\n"
+            "Спробуйте меншу кількість днів або очистіть scheduled_posts.json."
+        )
+        return
 
-            context.job_queue.run_once(
-                scheduled_publish,
-                when=run_date,
-                data=deepcopy(saved_session),
-                name=f"{user_id}_{session['package']}_{day_offset}_{t}",
-            )
-            count += 1
+    entries = add_schedule_entries(saved_session, slots, package_name)
+
+    for entry in entries:
+        register_schedule_job(context.job_queue, entry)
+
+    first_slot = slots[0].strftime("%d.%m.%Y %H:%M")
+    last_slot = slots[-1].strftime("%d.%m.%Y %H:%M")
+    preview = "\n".join(slot.strftime("%d.%m %H:%M") for slot in slots[:12])
+
+    if len(slots) > 12:
+        preview += f"\n... ще {len(slots) - 12} публікацій"
 
     await query.edit_message_text(
-        f"✅ Публікацію заплановано\n\n"
+        f"✅ Публікацію заплановано автоматично\n\n"
         f"Пакет: {package_name}\n"
         f"Днів: {days}\n"
-        f"Публікацій на платформу: {count}\n\n"
-        f"Час:\n" + "\n".join(times)
+        f"Публікацій на платформу: {total_publications}\n\n"
+        f"Вікна: 08:00–10:00, 12:00–14:00, 16:00–18:00, 18:00–20:00\n"
+        f"Крок: кожні {SLOT_STEP_MINUTES} хвилин\n\n"
+        f"Перша: {first_slot}\n"
+        f"Остання: {last_slot}\n\n"
+        f"Найближчі слоти:\n{preview}"
     )
 
     sessions.pop(user_id, None)
 
 
 async def scheduled_publish(context: ContextTypes.DEFAULT_TYPE):
-    session = context.job.data
-    await send_publication(context, session)
+    job_data = context.job.data or {}
+
+    if isinstance(job_data, dict) and "session" in job_data:
+        entry_id = job_data.get("id")
+        session = job_data.get("session")
+    else:
+        entry_id = None
+        session = job_data
+
+    if not session:
+        if entry_id:
+            update_schedule_entry(entry_id, "failed", failed=["Немає session у задачі"])
+        return
+
+    if entry_id:
+        update_schedule_entry(entry_id, "running")
+
+    success, failed = await send_publication(context, session)
+
+    if entry_id:
+        update_schedule_entry(entry_id, "done" if not failed else "done_with_errors", success=success, failed=failed)
+
+    if ADMIN_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="🕒 Запланована публікація виконана\n\n" + make_result(success, failed),
+            )
+        except Exception:
+            pass
 
 
 async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1301,6 +1500,10 @@ async def run_bot():
 
     await app.initialize()
     await app.start()
+
+    if app.job_queue:
+        restore_pending_schedule_jobs(app.job_queue)
+
     await app.updater.start_polling(drop_pending_updates=True)
 
     print("POLLING STARTED", flush=True)
