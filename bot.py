@@ -165,9 +165,9 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data in ("content_banner", "content_reels", "content_tim_video"):
         tariff_map = {
-            "content_banner": "Банер",
-            "content_reels": "Reels / Shorts",
-            "content_tim_video": "Відео з Тімом",
+            "content_banner": "Банер — 500 грн",
+            "content_reels": "Reels / Shorts — 800 грн",
+            "content_tim_video": "Відео з Тімом — 800 грн",
         }
         context.user_data["client_form"] = {
             "type": "content_order",
@@ -181,12 +181,13 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "client_prices":
         await query.message.reply_text(
             "💰 Тарифи HireUA\n\n"
-            "🆓 Текстові вакансії — безкоштовно до 3 разів на добу.\n"
-            "🆓 Текстові резюме — безкоштовно до 2 разів на добу.\n\n"
-            "🖼 Банер — 300 грн / шт.\n"
-            "🎬 Reels / Shorts — 500 грн / шт.\n\n"
-            "🚀 Start — просування 7 днів.\n"
-            "💼 Business — активне просування 7 днів.\n\n"
+            "🆓 Текстові вакансії — безкоштовно 3 рази на добу.\n"
+            "🆓 Текстові резюме — безкоштовно 2 рази на добу.\n\n"
+            "🖼 Банер — 500 грн / шт.\n"
+            "🎬 Reels / Shorts — 800 грн / шт.\n"
+            "🤖 Відео з Тімом — 800 грн / шт.\n\n"
+            "🚀 Start — 4500 грн / 7 днів.\n"
+            "💼 Business — 7500 грн / 7 днів.\n\n"
             "Для деталей напишіть HR менеджеру: @HireUkraine"
         )
         return
@@ -1259,7 +1260,7 @@ async def run_bot():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(client_resume_start, pattern="^client_resume$"))
-    app.add_handler(CallbackQueryHandler(client_buttons, pattern="^(client_|vacancy_)"))
+    app.add_handler(CallbackQueryHandler(client_buttons, pattern="^(client_|vacancy_|content_)"))
     app.add_handler(CallbackQueryHandler(buttons))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, handle_media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
