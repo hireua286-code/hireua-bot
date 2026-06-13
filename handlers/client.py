@@ -37,6 +37,15 @@ def start_vacancy_form(context, tariff):
     }
 
 
+def start_vacancy_promo_form(context, tariff):
+    context.user_data["client_form"] = {
+        "type": "vacancy_promo",
+        "tariff": tariff,
+        "step": "company",
+        "data": {},
+    }
+
+
 def start_content_order_form(context, tariff):
     context.user_data["client_form"] = {
         "type": "content_order",
@@ -76,20 +85,20 @@ async def client_buttons(update, context):
         )
 
     elif data == "vacancy_start":
-        start_content_order_form(context, "Start — 4500 грн")
+        start_vacancy_promo_form(context, "Start — 4500 грн")
         await query.message.reply_text(
             "🚀 Start — 4500 грн\n\n"
-            "Починаємо заповнення брифу для просування.\n\n"
-            "🏢 Вкажіть назву компанії / бренду:",
+            "Починаємо заповнення вакансії та брифу для просування.\n\n"
+            "🏢 Вкажіть назву компанії:",
             reply_markup=back_home_keyboard(),
         )
 
     elif data == "vacancy_business":
-        start_content_order_form(context, "Business — 7500 грн")
+        start_vacancy_promo_form(context, "Business — 7500 грн")
         await query.message.reply_text(
             "🚀🚀 Business — 7500 грн\n\n"
-            "Починаємо заповнення брифу для повного просування.\n\n"
-            "🏢 Вкажіть назву компанії / бренду:",
+            "Починаємо заповнення вакансії та брифу для повного просування.\n\n"
+            "🏢 Вкажіть назву компанії:",
             reply_markup=back_home_keyboard(),
         )
 
