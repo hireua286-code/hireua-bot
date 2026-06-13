@@ -29,10 +29,12 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from openai import OpenAI
 
 from handlers.client import client_main_keyboard, client_buttons
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
@@ -335,6 +337,7 @@ def days_keyboard():
         [InlineKeyboardButton("30 днів", callback_data="days:30")],
     ])
 
+
 def load_schedule_entries():
     if not os.path.exists(SCHEDULE_FILE):
         return []
@@ -386,7 +389,6 @@ def find_free_slots(count: int, start_from: datetime | None = None):
     }
 
     now = start_from or datetime.now(KYIV_TZ)
-    # Даємо боту мінімум 1 хвилину, щоб не ставити задачу в минуле.
     earliest = now + timedelta(minutes=1)
     free_slots = []
 
@@ -980,18 +982,60 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return False
 
 
+async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text or ""
+
+    try:
+        response = await asyncio.to_thread(
+            openai_client.responses.create,
+            model="gpt-4.1-mini",
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ти Тім AI, помічник сервісу HireUA. "
+                        "Спілкуйся мовою користувача: українською або російською. "
+                        "Можеш безкоштовно спілкуватися на загальні теми, відповідати на питання, "
+                        "допомагати порадами щодо роботи, резюме та вакансій. "
+                        "Можеш допомогти користувачу текстом правильно підготувати заявку на безкоштовну вакансію або резюме. "
+                        "Якщо користувач хоче офіційно подати заявку — порадь натиснути /start і вибрати потрібний розділ у меню. "
+                        "Без активного пакета Start або Business НЕ створюй банери, промпти для зображень, Reels/Shorts, "
+                        "рекламні тексти, контент-плани або готові матеріали для публікації. "
+                        "Якщо користувач просить платний контент — поясни, що це доступно в пакетах Start або Business "
+                        "і запропонуй зв'язатися з HR менеджером @HireUkraine. "
+                        "Усі матеріали для платного контенту можуть створюватися тільки з брендингом HireUA. "
+                        "Нічого не публікуй і не обіцяй автоматичну публікацію. Публікацію підтверджує адміністратор HireUA."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": user_text
+                }
+            ]
+        )
+
+        await update.message.reply_text(response.output_text)
+
+    except Exception as e:
+        print("TIM AI ERROR:", e, flush=True)
+        await update.message.reply_text(
+            "⚠️ Тим AI тимчасово недоступний. Спробуйте ще раз трохи пізніше."
+        )
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await client_form_text(update, context):
         return
 
     if not admin_only(update):
+        await tim_ai_reply(update, context)
         return
 
     user_id = update.effective_user.id
     session = sessions.get(user_id)
 
     if not session or session.get("step") != "wait_text":
-        await update.message.reply_text("Натисніть /start для нової публікації.")
+        await tim_ai_reply(update, context)
         return
 
     session["text"] = update.message.text or ""
@@ -1385,8 +1429,6 @@ async def schedule_posts(context, query, user_id, session):
     saved_session = deepcopy(session)
     days = int(session.get("days", 1))
 
-    # Start = 3 публікації на день, Business = 6 публікацій на день.
-    # Час бот підбирає сам у вікнах 08-10, 12-14, 16-18, 18-20 кожні 5 хвилин.
     publications_per_day = len(times)
     total_publications = publications_per_day * days
 
