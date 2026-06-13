@@ -455,13 +455,19 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("💼 Вкажіть бажану посаду:")
             return True
 
-        if step == "resume_position":
-            data["position"] = text
-            form["step"] = "resume_experience"
-            form["data"] = data
-            await update.message.reply_text("📋 Опишіть досвід роботи:")
-            return True
+       if step == "resume_position":
+           data["position"] = text
+           form["step"] = "resume_education"
+           form["data"] = data
+           await update.message.reply_text("🎓 Вкажіть освіту:")
+           return True
 
+       if step == "resume_education":
+           data["education"] = text
+           form["step"] = "resume_experience"
+           form["data"] = data
+           await update.message.reply_text("📋 Опишіть досвід роботи:")
+           return True
         if step == "resume_experience":
             data["experience"] = text
             form["step"] = "resume_salary"
@@ -487,6 +493,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📍 Місто: {data.get('city')}\n"
                 f"🛠 Спеціальність: {data.get('specialty')}\n"
                 f"💼 Бажана посада: {data.get('position')}\n"
+                f"🎓 Освіта: {data.get('education')}\n"                
                 f"📋 Досвід роботи: {data.get('experience')}\n"
                 f"💰 Бажана зарплата: {data.get('salary')}\n"
                 f"📞 Контакти: {data.get('contacts')}"
