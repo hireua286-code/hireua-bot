@@ -1,6 +1,7 @@
 import os
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
 import asyncio
 import threading
 import time as time_module
@@ -26,6 +27,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+
 from handlers.client import client_main_keyboard, client_buttons
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -88,7 +90,7 @@ def youtube_auth():
         },
         scopes=[YOUTUBE_UPLOAD_SCOPE],
     )
-    
+
     flow.redirect_uri = redirect_uri
 
     auth_url, _ = flow.authorization_url(
@@ -193,36 +195,30 @@ def days_keyboard():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👨‍💼 Розмістити вакансію", callback_data="client_vacancy")],
-        [InlineKeyboardButton("👷 Додати резюме", callback_data="client_resume")],
-        [InlineKeyboardButton("📢 Просування бізнесу", callback_data="client_promo")],
-        [InlineKeyboardButton("📞 Контакти", callback_data="client_contacts")],
-    ])
-
     caption = (
-    "👋 Вітаю!\n\n"
-    "Я Тім AI — ваш помічник у сервісі HireUA.\n\n"
-    "🤖 Тім AI: @HireUA_AI_bot\n"
-    "👨‍💼 HR менеджер: @HireUkraine\n\n"
-    "Допомагаю роботодавцям знаходити працівників, "
-    "а пошукачам — нові можливості для роботи.\n\n"
-    "Оберіть потрібний розділ нижче 👇"
-)
+        "👋 Вітаю!\n\n"
+        "Я Тім AI — ваш помічник у сервісі HireUA.\n\n"
+        "🤖 Тім AI: @HireUA_AI_bot\n"
+        "👨‍💼 HR менеджер: @HireUkraine\n\n"
+        "Допомагаю роботодавцям знаходити працівників, "
+        "а пошукачам — нові можливості для роботи.\n\n"
+        "Оберіть потрібний розділ нижче 👇"
+    )
 
     try:
         with open("IMG_7069.MP4", "rb") as video:
             await update.message.reply_video(
                 video=video,
                 caption=caption,
-                reply_markup=keyboard,
+                reply_markup=client_main_keyboard(),
                 supports_streaming=True,
             )
     except Exception:
         await update.message.reply_text(
             caption,
-            reply_markup=keyboard,
+            reply_markup=client_main_keyboard(),
         )
+
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin_only(update):
@@ -241,9 +237,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     sessions.pop(update.effective_user.id, None)
-    await update.message.reply_text(
-        "❌ Скасовано. Натисніть /start для нової публікації."
-    )
+    await update.message.reply_text("❌ Скасовано. Натисніть /start для нової публікації.")
 
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -410,15 +404,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Reels отримано.\n\nНадішліть текст публікації.")
         else:
             session["step"] = "choose_package"
-            await update.message.reply_text(
-                "✅ Reels отримано.\n\nОберіть пакет:", 
-                reply_markup=packages_keyboard() 
-            )
+            await update.message.reply_text("✅ Reels отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
         return
 
-    await update.message.reply_text(
-        "Зараз бот не очікує медіа. Натисніть /start для нової публікації."
-    )
+    await update.message.reply_text("Зараз бот не очікує медіа. Натисніть /start для нової публікації.")
 
 
 async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -468,6 +457,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             form["data"] = data
             await update.message.reply_text("📋 Опишіть досвід роботи:")
             return True
+
         if step == "resume_experience":
             data["experience"] = text
             form["step"] = "resume_salary"
@@ -493,14 +483,13 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📍 Місто: {data.get('city')}\n"
                 f"🛠 Спеціальність: {data.get('specialty')}\n"
                 f"💼 Бажана посада: {data.get('position')}\n"
-                f"🎓 Освіта: {data.get('education')}\n"                
+                f"🎓 Освіта: {data.get('education')}\n"
                 f"📋 Досвід роботи: {data.get('experience')}\n"
                 f"💰 Бажана зарплата: {data.get('salary')}\n"
                 f"📞 Контакти: {data.get('contacts')}"
             )
 
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
-
             await update.message.reply_text(
                 "✅ Резюме прийнято.\n"
                 "Ми перевіримо інформацію та зв'яжемось з вами."
@@ -508,9 +497,9 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             context.user_data.pop("client_form", None)
             return True
-            
-# ---------- КОНТЕНТ / ПРОСУВАННЯ ----------
-if form_type == "content_order":
+
+    # ---------- КОНТЕНТ / ПРОСУВАННЯ ----------
+    if form_type == "content_order":
         if step == "content_company":
             data["company"] = text
             form["step"] = "content_about"
@@ -634,7 +623,6 @@ if form_type == "content_order":
             )
 
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
-
             await update.message.reply_text(
                 "✅ Заявка на контент прийнята.\n"
                 "Ми перевіримо інформацію та зв'яжемось з вами."
@@ -642,73 +630,73 @@ if form_type == "content_order":
 
             context.user_data.pop("client_form", None)
             return True
-            
-# ---------- ВАКАНСІЯ ----------
-if step == "company":
+
+    # ---------- ВАКАНСІЯ ----------
+    if step == "company":
         data["company"] = text
         form["step"] = "position"
         form["data"] = data
         await update.message.reply_text("💼 Вкажіть посаду:")
         return True
 
-        if step == "position":
-            data["position"] = text
-            form["step"] = "city"
-            form["data"] = data
-            await update.message.reply_text("📍 Вкажіть місто:")
-            return True
+    if step == "position":
+        data["position"] = text
+        form["step"] = "city"
+        form["data"] = data
+        await update.message.reply_text("📍 Вкажіть місто:")
+        return True
 
-        if step == "city":
-            data["city"] = text
-            form["step"] = "address"
-            form["data"] = data
-            await update.message.reply_text("📍 Вкажіть адресу роботи:")
-            return True
+    if step == "city":
+        data["city"] = text
+        form["step"] = "address"
+        form["data"] = data
+        await update.message.reply_text("📍 Вкажіть адресу роботи:")
+        return True
 
-        if step == "address":
-            data["address"] = text
-            form["step"] = "education"
-            form["data"] = data
-            await update.message.reply_text("🎓 Вкажіть освіту:")
-            return True
+    if step == "address":
+        data["address"] = text
+        form["step"] = "education"
+        form["data"] = data
+        await update.message.reply_text("🎓 Вкажіть освіту:")
+        return True
 
-        if step == "education":
-            data["education"] = text
-            form["step"] = "experience"
-            form["data"] = data
-            await update.message.reply_text("📋 Вкажіть досвід роботи:")
-            return True
+    if step == "education":
+        data["education"] = text
+        form["step"] = "experience"
+        form["data"] = data
+        await update.message.reply_text("📋 Вкажіть досвід роботи:")
+        return True
 
-        if step == "experience":
-            data["experience"] = text
-            form["step"] = "schedule"
-            form["data"] = data
-            await update.message.reply_text("🕒 Вкажіть графік роботи:")
-            return True
+    if step == "experience":
+        data["experience"] = text
+        form["step"] = "schedule"
+        form["data"] = data
+        await update.message.reply_text("🕒 Вкажіть графік роботи:")
+        return True
 
-        if step == "schedule":
-            data["schedule"] = text
-            form["step"] = "salary"
-            form["data"] = data
-            await update.message.reply_text("💰 Вкажіть зарплату:")
-            return True
+    if step == "schedule":
+        data["schedule"] = text
+        form["step"] = "salary"
+        form["data"] = data
+        await update.message.reply_text("💰 Вкажіть зарплату:")
+        return True
 
-        if step == "salary":
-            data["salary"] = text
-            form["step"] = "duties"
-            form["data"] = data
-            await update.message.reply_text("📝 Вкажіть обов'язки:")
-            return True
+    if step == "salary":
+        data["salary"] = text
+        form["step"] = "duties"
+        form["data"] = data
+        await update.message.reply_text("📝 Вкажіть обов'язки:")
+        return True
 
-        if step == "duties":
-            data["duties"] = text
-            form["step"] = "benefits"
-            form["data"] = data
-            await update.message.reply_text(
-                "🎁 Що пропонує компанія?\n"
-                "Наприклад: харчування, розвозка, житло, бонуси, навчання тощо."
-            )
-            return True
+    if step == "duties":
+        data["duties"] = text
+        form["step"] = "benefits"
+        form["data"] = data
+        await update.message.reply_text(
+            "🎁 Що пропонує компанія?\n"
+            "Наприклад: харчування, розвозка, житло, бонуси, навчання тощо."
+        )
+        return True
 
     if step == "benefits":
         data["benefits"] = text
@@ -721,10 +709,7 @@ if step == "company":
         data["contacts"] = text
         form["step"] = "days"
         form["data"] = data
-
-        await update.message.reply_text(
-            "📅 На скільки днів розміщення?\n\n1 / 3 / 7 / 14 / 30"
-        )
+        await update.message.reply_text("📅 На скільки днів розміщення?\n\n1 / 3 / 7 / 14 / 30")
         return True
 
     if step == "days":
@@ -749,7 +734,6 @@ if step == "company":
         )
 
         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
-
         await update.message.reply_text(
             "✅ Заявка прийнята.\n"
             "Ми перевіримо інформацію та зв'яжемось з вами."
@@ -759,6 +743,8 @@ if step == "company":
         return True
 
     return False
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await client_form_text(update, context):
         return
@@ -1201,7 +1187,7 @@ async def run_bot():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin))    
+    app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(client_resume_start, pattern="^client_resume$"))
     app.add_handler(CallbackQueryHandler(client_buttons, pattern="^(client_|vacancy_)"))
@@ -1227,4 +1213,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
