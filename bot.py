@@ -30,7 +30,7 @@ from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from openai import OpenAI
-
+import gspread
 from handlers.client import client_main_keyboard, client_buttons
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -48,7 +48,8 @@ YOUTUBE_PRIVACY_STATUS = os.getenv("YOUTUBE_PRIVACY_STATUS", "public")
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 
 BASE_URL = os.getenv("BASE_URL", "https://hireua-bot.onrender.com")
-
+GOOGLE_SHEET_ID = "1-HxPVaoQmDgNONc5D9yfs1kKt0goDVv8bp1fC3HEpR4"
+GOOGLE_CREDENTIALS_FILE = "/etc/secrets/key_users_json"
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 GRAPH_URL = "https://graph.facebook.com/v25.0"
 
