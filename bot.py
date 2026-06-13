@@ -510,7 +510,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return True
             
 # ---------- КОНТЕНТ / ПРОСУВАННЯ ----------
-        if form_type == "content_order":
+if form_type == "content_order":
         if step == "content_company":
             data["company"] = text
             form["step"] = "content_about"
