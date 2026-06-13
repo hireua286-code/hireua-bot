@@ -1,171 +1,253 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    form = context.user_data.get("client_form")
 
+    if not form:
+        return False
 
-def client_main_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👨‍💼 Розмістити вакансію", callback_data="client_vacancy")],
-        [InlineKeyboardButton("🚀 Послуги та ціни", callback_data="client_prices")],
-        [InlineKeyboardButton("👷 Додати резюме", callback_data="client_resume")],
-        [InlineKeyboardButton("📢 Просування бізнесу", callback_data="client_promo")],
-        [InlineKeyboardButton("📞 Контакти", callback_data="client_contacts")],
-    ])
+    text = update.message.text
+    step = form.get("step")
+    data = form.get("data", {})
+    form_type = form.get("type")
+    tariff = form.get("tariff", "")
 
+    # ---------- РЕЗЮМЕ ----------
+    if form_type == "resume":
+        if step == "resume_name":
+            data["name"] = text
+            form["step"] = "resume_city"
+            form["data"] = data
+            await update.message.reply_text("📍 Вкажіть місто:")
+            return True
 
-def vacancy_tariff_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🆓 БЕЗКОШТОВНО", callback_data="vacancy_free")],
-        [InlineKeyboardButton("🚀 Start — 4500 грн", callback_data="vacancy_start")],
-        [InlineKeyboardButton("🚀🚀 Business — 7500 грн", callback_data="vacancy_business")],
-        [InlineKeyboardButton("🎨 Замовити банер — 500 грн", callback_data="vacancy_banner")],
-        [InlineKeyboardButton("🎥 Замовити Reels / Shorts — 800 грн", callback_data="vacancy_reels")],
-        [InlineKeyboardButton("🏠 Головне меню", callback_data="client_home")],
-    ])
+        if step == "resume_city":
+            data["city"] = text
+            form["step"] = "resume_education"
+            form["data"] = data
+            await update.message.reply_text("🎓 Вкажіть освіту:")
+            return True
 
+        if step == "resume_education":
+            data["education"] = text
+            form["step"] = "resume_specialty"
+            form["data"] = data
+            await update.message.reply_text("🛠 Вкажіть спеціальність:")
+            return True
 
-def back_home_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏠 Головне меню", callback_data="client_home")]
-    ])
+        if step == "resume_specialty":
+            data["specialty"] = text
+            form["step"] = "resume_position"
+            form["data"] = data
+            await update.message.reply_text("💼 Вкажіть бажану посаду:")
+            return True
 
+        if step == "resume_position":
+            data["position"] = text
+            form["step"] = "resume_experience"
+            form["data"] = data
+            await update.message.reply_text("📋 Опишіть досвід роботи:")
+            return True
 
-def start_vacancy_form(context, tariff):
-    context.user_data["client_form"] = {
-        "type": "vacancy",
-        "tariff": tariff,
-        "step": "company",
-        "data": {}
-    }
+        if step == "resume_experience":
+            data["experience"] = text
+            form["step"] = "resume_driver"
+            form["data"] = data
+            await update.message.reply_text("🚗 Чи є водійське посвідчення?")
+            return True
 
+        if step == "resume_driver":
+            data["driver"] = text
+            form["step"] = "resume_salary"
+            form["data"] = data
+            await update.message.reply_text("💰 Вкажіть бажану зарплату:")
+            return True
 
-async def client_buttons(update, context):
-    query = update.callback_query
-    await query.answer()
+        if step == "resume_salary":
+            data["salary"] = text
+            form["step"] = "resume_contacts"
+            form["data"] = data
+            await update.message.reply_text("📞 Вкажіть контакти:")
+            return True
 
-    data = query.data
+        if step == "resume_contacts":
+            data["contacts"] = text
 
-    if data == "client_home":
+            admin_text = (
+                "📥 Нове резюме\n\n"
+                f"Тариф: {tariff}\n"
+                f"👤 Ім'я: {data.get('name')}\n"
+                f"📍 Місто: {data.get('city')}\n"
+                f"🎓 Освіта: {data.get('education')}\n"
+                f"🛠 Спеціальність: {data.get('specialty')}\n"
+                f"💼 Бажана посада: {data.get('position')}\n"
+                f"📋 Досвід роботи: {data.get('experience')}\n"
+                f"🚗 Водійське посвідчення: {data.get('driver')}\n"
+                f"💰 Бажана зарплата: {data.get('salary')}\n"
+                f"📞 Контакти: {data.get('contacts')}"
+            )
+
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+
+            await update.message.reply_text(
+                "✅ Резюме прийнято.\n"
+                "Ми перевіримо інформацію та зв'яжемось з вами."
+            )
+
+            context.user_data.pop("client_form", None)
+            return True
+
+    # ---------- ВАКАНСІЯ / START / BUSINESS / БАНЕР / REELS ----------
+    if step == "company":
+        data["company"] = text
+        form["step"] = "position"
+        form["data"] = data
+        await update.message.reply_text("💼 Вкажіть посаду:")
+        return True
+
+    if step == "position":
+        data["position"] = text
+        form["step"] = "city"
+        form["data"] = data
+        await update.message.reply_text("📍 Вкажіть місто:")
+        return True
+
+    if step == "city":
+        data["city"] = text
+        form["step"] = "address"
+        form["data"] = data
+        await update.message.reply_text("📍 Вкажіть адресу роботи:")
+        return True
+
+    if step == "address":
+        data["address"] = text
+        form["step"] = "education"
+        form["data"] = data
+        await update.message.reply_text("🎓 Вкажіть освіту:")
+        return True
+
+    if step == "education":
+        data["education"] = text
+        form["step"] = "experience"
+        form["data"] = data
+        await update.message.reply_text("📋 Вкажіть досвід роботи:")
+        return True
+
+    if step == "experience":
+        data["experience"] = text
+        form["step"] = "schedule"
+        form["data"] = data
+        await update.message.reply_text("🕒 Вкажіть графік роботи:")
+        return True
+
+    if step == "schedule":
+        data["schedule"] = text
+        form["step"] = "salary"
+        form["data"] = data
+        await update.message.reply_text("💰 Вкажіть зарплату:")
+        return True
+
+    if step == "salary":
+        data["salary"] = text
+        form["step"] = "duties"
+        form["data"] = data
+        await update.message.reply_text("📝 Вкажіть обов'язки:")
+        return True
+
+    if step == "duties":
+        data["duties"] = text
+        form["step"] = "benefits"
+        form["data"] = data
+        await update.message.reply_text("🎁 Що пропонує компанія?")
+        return True
+
+    if step == "benefits":
+        data["benefits"] = text
+        form["step"] = "contacts"
+        form["data"] = data
+        await update.message.reply_text("📞 Вкажіть контакти:")
+        return True
+
+    if step == "contacts":
+        data["contacts"] = text
+
+        if tariff != "БЕЗКОШТОВНО":
+            form["step"] = "promo_task"
+            form["data"] = data
+            await update.message.reply_text(
+                "🎯 Що потрібно зробити?\n\n"
+                "Наприклад: банер, Reels, Shorts, реклама вакансії, просування компанії."
+            )
+            return True
+
+        form["step"] = "days"
+        form["data"] = data
+        await update.message.reply_text("📅 На скільки днів розміщення?\n\n1 / 3 / 7 / 14 / 30")
+        return True
+
+    if step == "promo_task":
+        data["promo_task"] = text
+        form["step"] = "promo_style"
+        form["data"] = data
+        await update.message.reply_text(
+            "🎨 Який стиль потрібен?\n\n"
+            "Наприклад: сучасний, яскравий, серйозний, преміум, молодіжний."
+        )
+        return True
+
+    if step == "promo_style":
+        data["promo_style"] = text
+        form["step"] = "promo_details"
+        form["data"] = data
+        await update.message.reply_text(
+            "🧩 Що обов'язково треба показати в рекламі?\n\n"
+            "Наприклад: логотип, вакансії, зарплата, адреса, команда, переваги."
+        )
+        return True
+
+    if step == "promo_details":
+        data["promo_details"] = text
+        form["step"] = "days"
+        form["data"] = data
+        await update.message.reply_text("📅 На скільки днів розміщення?\n\n1 / 3 / 7 / 14 / 30")
+        return True
+
+    if step == "days":
+        data["days"] = text
+
+        prompt_block = ""
+        if tariff != "БЕЗКОШТОВНО":
+            prompt_block = (
+                "\n\n🧠 Дані для промпту:\n"
+                f"🎯 Завдання: {data.get('promo_task')}\n"
+                f"🎨 Стиль: {data.get('promo_style')}\n"
+                f"🧩 Обов'язково показати: {data.get('promo_details')}"
+            )
+
+        admin_text = (
+            "📥 Нова заявка\n\n"
+            f"Тариф: {tariff}\n"
+            f"🏢 Компанія: {data.get('company')}\n"
+            f"💼 Посада: {data.get('position')}\n"
+            f"📍 Місто: {data.get('city')}\n"
+            f"📍 Адреса: {data.get('address')}\n"
+            f"🎓 Освіта: {data.get('education')}\n"
+            f"📋 Досвід роботи: {data.get('experience')}\n"
+            f"🕒 Графік роботи: {data.get('schedule')}\n"
+            f"💰 Зарплата: {data.get('salary')}\n"
+            f"📝 Обов'язки: {data.get('duties')}\n"
+            f"🎁 Компанія пропонує: {data.get('benefits')}\n"
+            f"📞 Контакти: {data.get('contacts')}\n"
+            f"📅 Днів розміщення: {data.get('days')}"
+            f"{prompt_block}"
+        )
+
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+
+        await update.message.reply_text(
+            "✅ Заявка прийнята.\n"
+            "Ми перевіримо інформацію та зв'яжемось з вами."
+        )
+
         context.user_data.pop("client_form", None)
-        await query.message.reply_text(
-            "🇺🇦 HireUA\n\nОберіть потрібний розділ 👇",
-            reply_markup=client_main_keyboard(),
-        )
+        return True
 
-    elif data == "client_vacancy":
-        await query.message.reply_text(
-            "👨‍💼 Розмістити вакансію\n\n"
-            "Оберіть тариф або послугу 👇",
-            reply_markup=vacancy_tariff_keyboard(),
-        )
-
-    elif data == "vacancy_free":
-        start_vacancy_form(context, "БЕЗКОШТОВНО")
-        await query.message.reply_text(
-            "🆓 БЕЗКОШТОВНО\n\n"
-            "Починаємо заповнення вакансії.\n\n"
-            "🏢 Вкажіть назву компанії:",
-            reply_markup=back_home_keyboard(),
-        )
-
-    elif data == "vacancy_start":
-        start_vacancy_form(context, "Start — 4500 грн")
-        await query.message.reply_text(
-            "🚀 Start — 4500 грн\n\n"
-            "Починаємо заповнення вакансії.\n\n"
-            "🏢 Вкажіть назву компанії:",
-            reply_markup=back_home_keyboard(),
-        )
-
-    elif data == "vacancy_business":
-        start_vacancy_form(context, "Business — 7500 грн")
-        await query.message.reply_text(
-            "🚀🚀 Business — 7500 грн\n\n"
-            "Починаємо заповнення вакансії.\n\n"
-            "🏢 Вкажіть назву компанії:",
-            reply_markup=back_home_keyboard(),
-        )
-
-    elif data == "vacancy_banner":
-        start_vacancy_form(context, "Банер — 500 грн")
-        await query.message.reply_text(
-            "🎨 Банер — 500 грн\n\n"
-            "Починаємо заповнення заявки.\n\n"
-            "🏢 Вкажіть назву компанії:",
-            reply_markup=back_home_keyboard(),
-        )
-
-    elif data == "vacancy_reels":
-        start_vacancy_form(context, "Reels / Shorts — 800 грн")
-        await query.message.reply_text(
-            "🎥 Reels / Shorts — 800 грн\n\n"
-            "Починаємо заповнення заявки.\n\n"
-            "🏢 Вкажіть назву компанії:",
-            reply_markup=back_home_keyboard(),
-        )
-
-    elif data == "client_resume":
-        await query.message.reply_text(
-            "🆓 Текстове резюме — безкоштовно\n\n"
-            "Вкажіть інформацію про резюме:\n\n"
-            "👤 Ім'я:\n"
-            "📍 Місто:\n"
-            "🎓 Освіта:\n"
-            "🛠 Спеціальність:\n"
-            "💼 Бажана посада:\n"
-            "📋 Досвід роботи:\n"
-            "🚗 Водійське посвідчення:\n"
-            "💰 Бажана зарплата:\n"
-            "📞 Контакти:",
-            reply_markup=back_home_keyboard(),
-        )
-
-    elif data == "client_promo":
-        await query.message.reply_text(
-            "📢 Просування бізнесу\n\n"
-            "Для просування компанії, акції, відкриття або бренду напишіть HR менеджеру:\n\n"
-            "👨‍💼 @HireUkraine",
-            reply_markup=back_home_keyboard(),
-        )
-
-    elif data == "client_prices":
-        await query.message.reply_text(
-            "🆓 БЕЗКОШТОВНО\n\n"
-            "📢 Текстові вакансії — 3 публікації на день\n"
-            "👷 Текстові резюме — 2 публікації на день\n\n"
-            "✅ Telegram канал обраного міста\n\n"
-            "📅 Термін розміщення:\n"
-            "1 • 3 • 7 • 14 • 21 • 30 днів\n\n"
-            "🔄 Якщо вакансія залишається актуальною, термін розміщення можна продовжити\n\n"
-            "━━━━━━━━━━━━━━━\n\n"
-            "🚀 Start — 4500 грн / 7 днів\n\n"
-            "📢 63 публікації за 7 днів\n"
-            "(3 публікації на день у Telegram, Facebook та Instagram)\n\n"
-            "✅ Telegram\n"
-            "✅ Facebook\n"
-            "✅ Instagram\n"
-            "🎬 YouTube Shorts — тільки для відеоформату\n\n"
-            "🎨 Банер — просування готового банера\n\n"
-            "━━━━━━━━━━━━━━━\n\n"
-            "🚀🚀 Business — 7500 грн / 7 днів\n\n"
-            "📢 126 публікацій за 7 днів\n"
-            "(6 публікацій на день у Telegram, Facebook та Instagram)\n\n"
-            "✅ Telegram\n"
-            "✅ Facebook\n"
-            "✅ Instagram\n"
-            "🎬 YouTube Shorts — тільки для відеоформату\n\n"
-            "🎨 Банер — просування готового банера\n"
-            "🎥 Reels / Shorts — просування готового відео\n"
-            "🤖 Відео з Тімом AI — за окремим замовленням\n\n"
-            "━━━━━━━━━━━━━━━\n\n"
-            "💰 Створення контенту\n\n"
-            "🎨 Банер — 500 грн\n"
-            "🎥 Reels / Shorts — 800 грн\n"
-            "🤖 Відео з Тімом AI — 800 грн",
-            reply_markup=back_home_keyboard(),
-        )
-
-    elif data == "client_contacts":
-        await query.message.reply_text(
-            "🤖 Тім AI: @HireUA_AI_bot\n"
-            "👨‍💼 HR менеджер: @HireUkraine",
-            reply_markup=back_home_keyboard(),
-        )
+    return False
