@@ -430,7 +430,79 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     step = form.get("step")
     data = form.get("data", {})
+    form_type = form.get("type")
 
+    # ---------- РЕЗЮМЕ ----------
+    if form_type == "resume":
+        if step == "resume_name":
+            data["name"] = text
+            form["step"] = "resume_city"
+            form["data"] = data
+            await update.message.reply_text("📍 Вкажіть місто:")
+            return True
+
+        if step == "resume_city":
+            data["city"] = text
+            form["step"] = "resume_specialty"
+            form["data"] = data
+            await update.message.reply_text("🛠 Вкажіть спеціальність:")
+            return True
+
+        if step == "resume_specialty":
+            data["specialty"] = text
+            form["step"] = "resume_position"
+            form["data"] = data
+            await update.message.reply_text("💼 Вкажіть бажану посаду:")
+            return True
+
+        if step == "resume_position":
+            data["position"] = text
+            form["step"] = "resume_experience"
+            form["data"] = data
+            await update.message.reply_text("📋 Опишіть досвід роботи:")
+            return True
+
+        if step == "resume_experience":
+            data["experience"] = text
+            form["step"] = "resume_salary"
+            form["data"] = data
+            await update.message.reply_text("💰 Вкажіть бажану зарплату:")
+            return True
+
+        if step == "resume_salary":
+            data["salary"] = text
+            form["step"] = "resume_contacts"
+            form["data"] = data
+            await update.message.reply_text("📞 Вкажіть контакти:")
+            return True
+
+        if step == "resume_contacts":
+            data["contacts"] = text
+            form["data"] = data
+
+            admin_text = (
+                "📥 Нове резюме\n\n"
+                f"Тариф: {form.get('tariff')}\n"
+                f"👤 Ім'я: {data.get('name')}\n"
+                f"📍 Місто: {data.get('city')}\n"
+                f"🛠 Спеціальність: {data.get('specialty')}\n"
+                f"💼 Бажана посада: {data.get('position')}\n"
+                f"📋 Досвід роботи: {data.get('experience')}\n"
+                f"💰 Бажана зарплата: {data.get('salary')}\n"
+                f"📞 Контакти: {data.get('contacts')}"
+            )
+
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+
+            await update.message.reply_text(
+                "✅ Резюме прийнято.\n"
+                "Ми перевіримо інформацію та зв'яжемось з вами."
+            )
+
+            context.user_data.pop("client_form", None)
+            return True
+
+    # ---------- ВАКАНСІЯ ----------
     if step == "company":
         data["company"] = text
         form["step"] = "position"
@@ -546,8 +618,6 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return True
 
     return False
-
-
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await client_form_text(update, context):
         return
