@@ -28,6 +28,15 @@ def back_home_keyboard():
     ])
 
 
+def start_vacancy_form(context, tariff):
+    context.user_data["client_form"] = {
+        "type": "vacancy",
+        "tariff": tariff,
+        "step": "company",
+        "data": {}
+    }
+
+
 async def client_buttons(update, context):
     query = update.callback_query
     await query.answer()
@@ -35,6 +44,7 @@ async def client_buttons(update, context):
     data = query.data
 
     if data == "client_home":
+        context.user_data.pop("client_form", None)
         await query.message.reply_text(
             "🇺🇦 HireUA\n\nОберіть потрібний розділ 👇",
             reply_markup=client_main_keyboard(),
@@ -48,14 +58,8 @@ async def client_buttons(update, context):
         )
 
     elif data == "vacancy_free":
-        context.user_data["client_form"] = {
-            "type": "vacancy",
-            "tariff": "БЕЗКОШТОВНО",
-            "step": "company",
-            "data": {}
-        }
-
-    await query.message.reply_text(
+        start_vacancy_form(context, "БЕЗКОШТОВНО")
+        await query.message.reply_text(
             "🆓 БЕЗКОШТОВНО\n\n"
             "Починаємо заповнення вакансії.\n\n"
             "🏢 Вкажіть назву компанії:",
@@ -63,6 +67,7 @@ async def client_buttons(update, context):
         )
 
     elif data == "vacancy_start":
+        start_vacancy_form(context, "Start — 4500 грн")
         await query.message.reply_text(
             "🚀 Start — 4500 грн\n\n"
             "Починаємо заповнення заявки.\n\n"
@@ -71,6 +76,7 @@ async def client_buttons(update, context):
         )
 
     elif data == "vacancy_business":
+        start_vacancy_form(context, "Business — 7500 грн")
         await query.message.reply_text(
             "🚀🚀 Business — 7500 грн\n\n"
             "Починаємо заповнення заявки.\n\n"
@@ -79,16 +85,18 @@ async def client_buttons(update, context):
         )
 
     elif data == "vacancy_banner":
+        start_vacancy_form(context, "Банер — 500 грн")
         await query.message.reply_text(
-            "🎨 Замовити банер — 500 грн\n\n"
+            "🎨 Банер — 500 грн\n\n"
             "Починаємо заповнення заявки.\n\n"
             "🏢 Вкажіть назву компанії:",
             reply_markup=back_home_keyboard(),
         )
 
     elif data == "vacancy_reels":
+        start_vacancy_form(context, "Reels / Shorts — 800 грн")
         await query.message.reply_text(
-            "🎥 Замовити Reels / Shorts — 800 грн\n\n"
+            "🎥 Reels / Shorts — 800 грн\n\n"
             "Починаємо заповнення заявки.\n\n"
             "🏢 Вкажіть назву компанії:",
             reply_markup=back_home_keyboard(),
@@ -136,7 +144,7 @@ async def client_buttons(update, context):
             "🎨 Банер — просування готового банера\n\n"
             "━━━━━━━━━━━━━━━\n\n"
             "🚀🚀 Business — 7500 грн / 7 днів\n\n"
-            "📢 126 публікацій за 7 днів\n"
+            "📢 126 публікації за 7 днів\n"
             "(6 публікацій на день у Telegram, Facebook та Instagram)\n\n"
             "✅ Telegram\n"
             "✅ Facebook\n"
