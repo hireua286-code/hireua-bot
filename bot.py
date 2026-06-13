@@ -643,8 +643,8 @@ if form_type == "content_order":
             context.user_data.pop("client_form", None)
             return True
             
-    # ---------- ВАКАНСІЯ ----------
-    if step == "company":
+# ---------- ВАКАНСІЯ ----------
+if step == "company":
         data["company"] = text
         form["step"] = "position"
         form["data"] = data
