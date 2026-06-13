@@ -989,6 +989,7 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await asyncio.to_thread(
             openai_client.responses.create,
             model="gpt-4.1-mini",
+            tools=[{"type": "web_search_preview"}],
             input=[
                 {
                     "role": "system",
