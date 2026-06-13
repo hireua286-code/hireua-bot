@@ -33,7 +33,16 @@ def start_vacancy_form(context, tariff):
         "type": "vacancy",
         "tariff": tariff,
         "step": "company",
-        "data": {}
+        "data": {},
+    }
+
+
+def start_content_order_form(context, tariff):
+    context.user_data["client_form"] = {
+        "type": "content_order",
+        "tariff": tariff,
+        "step": "content_company",
+        "data": {},
     }
 
 
@@ -67,38 +76,38 @@ async def client_buttons(update, context):
         )
 
     elif data == "vacancy_start":
-        start_vacancy_form(context, "Start — 4500 грн")
+        start_content_order_form(context, "Start — 4500 грн")
         await query.message.reply_text(
             "🚀 Start — 4500 грн\n\n"
-            "Починаємо заповнення заявки для просування вакансії.\n\n"
-            "🏢 Вкажіть назву компанії:",
+            "Починаємо заповнення брифу для просування.\n\n"
+            "🏢 Вкажіть назву компанії / бренду:",
             reply_markup=back_home_keyboard(),
         )
 
     elif data == "vacancy_business":
-        start_vacancy_form(context, "Business — 7500 грн")
+        start_content_order_form(context, "Business — 7500 грн")
         await query.message.reply_text(
             "🚀🚀 Business — 7500 грн\n\n"
-            "Починаємо заповнення заявки для повного просування вакансії.\n\n"
-            "🏢 Вкажіть назву компанії:",
+            "Починаємо заповнення брифу для повного просування.\n\n"
+            "🏢 Вкажіть назву компанії / бренду:",
             reply_markup=back_home_keyboard(),
         )
 
     elif data == "vacancy_banner":
-        start_vacancy_form(context, "Банер — 500 грн")
+        start_content_order_form(context, "Банер — 500 грн")
         await query.message.reply_text(
             "🎨 Банер — 500 грн\n\n"
-            "Починаємо заповнення заявки для банера вакансії.\n\n"
-            "🏢 Вкажіть назву компанії:",
+            "Починаємо заповнення брифу для банера.\n\n"
+            "🏢 Вкажіть назву компанії / бренду:",
             reply_markup=back_home_keyboard(),
         )
 
     elif data == "vacancy_reels":
-        start_vacancy_form(context, "Reels / Shorts — 800 грн")
+        start_content_order_form(context, "Reels / Shorts — 800 грн")
         await query.message.reply_text(
             "🎥 Reels / Shorts — 800 грн\n\n"
-            "Починаємо заповнення заявки для відео вакансії.\n\n"
-            "🏢 Вкажіть назву компанії:",
+            "Починаємо заповнення брифу для відео.\n\n"
+            "🏢 Вкажіть назву компанії / бренду:",
             reply_markup=back_home_keyboard(),
         )
 
@@ -113,10 +122,9 @@ async def client_buttons(update, context):
     elif data == "client_promo":
         await query.message.reply_text(
             "📢 Просування бізнесу\n\n"
-            "Тут можна замовити просування компанії, акції, відкриття, вакансії або бренду.\n\n"
-            "Оберіть послугу через розділ «👨‍💼 Розмістити вакансію» "
-            "або напишіть HR менеджеру:\n\n"
-            "👨‍💼 @HireUkraine",
+            "Для просування компанії, акції, відкриття, вакансії або бренду "
+            "оберіть Start / Business / Банер / Reels у розділі «👨‍💼 Розмістити вакансію».\n\n"
+            "👨‍💼 HR менеджер: @HireUkraine",
             reply_markup=back_home_keyboard(),
         )
 
@@ -128,27 +136,14 @@ async def client_buttons(update, context):
             "✅ Telegram канал обраного міста\n\n"
             "📅 Термін розміщення:\n"
             "1 • 3 • 7 • 14 • 21 • 30 днів\n\n"
-            "🔄 Якщо вакансія залишається актуальною, термін розміщення можна продовжити\n\n"
             "━━━━━━━━━━━━━━━\n\n"
-            "🚀 Start — 4500 грн / 7 днів\n\n"
+            "🚀 Start — 4500 грн / 7 днів\n"
             "📢 63 публікації за 7 днів\n"
             "(3 публікації на день у Telegram, Facebook та Instagram)\n\n"
-            "✅ Telegram\n"
-            "✅ Facebook\n"
-            "✅ Instagram\n"
-            "🎬 YouTube Shorts — тільки для відеоформату\n\n"
-            "🎨 Банер — просування готового банера\n\n"
             "━━━━━━━━━━━━━━━\n\n"
-            "🚀🚀 Business — 7500 грн / 7 днів\n\n"
+            "🚀🚀 Business — 7500 грн / 7 днів\n"
             "📢 126 публікацій за 7 днів\n"
             "(6 публікацій на день у Telegram, Facebook та Instagram)\n\n"
-            "✅ Telegram\n"
-            "✅ Facebook\n"
-            "✅ Instagram\n"
-            "🎬 YouTube Shorts — тільки для відеоформату\n\n"
-            "🎨 Банер — просування готового банера\n"
-            "🎥 Reels / Shorts — просування готового відео\n"
-            "🤖 Відео з Тімом AI — за окремим замовленням\n\n"
             "━━━━━━━━━━━━━━━\n\n"
             "💰 Створення контенту\n\n"
             "🎨 Банер — 500 грн\n"
@@ -163,4 +158,3 @@ async def client_buttons(update, context):
             "👨‍💼 HR менеджер: @HireUkraine",
             reply_markup=back_home_keyboard(),
         )
-        
