@@ -146,6 +146,57 @@ def save_user_to_sheet(update: Update, last_message: str = ""):
 
     except Exception as e:
         print("GOOGLE SHEETS ERROR:", e, flush=True)
+
+
+def append_vacancy_to_sheet(data: dict, tariff: str = ""):
+    try:
+        now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("Vacancies")
+
+        sheet.append_row([
+            now,
+            data.get("company", ""),
+            data.get("position", ""),
+            data.get("city", ""),
+            data.get("address", ""),
+            data.get("education", ""),
+            data.get("experience", ""),
+            data.get("schedule", ""),
+            data.get("salary", ""),
+            data.get("duties", ""),
+            data.get("benefits", ""),
+            data.get("contacts", ""),
+            data.get("days", ""),
+            tariff,
+            "Новий",
+        ])
+    except Exception as e:
+        print("GOOGLE VACANCY ERROR:", e, flush=True)
+
+
+def append_resume_to_sheet(data: dict):
+    try:
+        now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("Resumes")
+
+        sheet.append_row([
+            now,
+            data.get("name", ""),
+            data.get("city", ""),
+            data.get("specialty", ""),
+            data.get("position", ""),
+            data.get("education", ""),
+            data.get("experience", ""),
+            data.get("salary", ""),
+            data.get("contacts", ""),
+            "Новий",
+        ])
+    except Exception as e:
+        print("GOOGLE RESUME ERROR:", e, flush=True)
+
+
 # ---------- CLIENT KEYBOARDS / BUTTONS ----------
 # Цей блок спеціально дублює клієнтську логіку всередині bot.py,
 # щоб Start / Business гарантовано запускали бриф vacancy_promo.
@@ -852,6 +903,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+            append_resume_to_sheet(data)
             await update.message.reply_text(
                 "✅ Резюме прийнято.\n"
                 "Ми перевіримо інформацію та зв'яжемось з вами."
@@ -1037,6 +1089,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+        append_vacancy_to_sheet(data, form.get("tariff", ""))
         await update.message.reply_text(
             "✅ Заявка прийнята.\n"
             "Ми перевіримо інформацію та зв'яжемось з вами."
