@@ -1500,31 +1500,61 @@ async def generate_tim_banner(update: Update, context: ContextTypes.DEFAULT_TYPE
     prompt = f"""
 {task}
 
-Формат: вертикальний рекламний банер 1080x1920.
-Мова тексту на банері: українська.
-Бренд HireUA має виглядати професійно, але не забирати увагу від клієнта.
-Обов'язково залиш вільну зону у верхньому лівому куті для водяного знаку @UkraineHire.
-Водяний знак буде доданий автоматично після генерації.
-Не перевантажуй банер текстом. Зроби чіткий заголовок, 2-4 короткі переваги і зрозумілий заклик до дії.
+Create a premium, high-end commercial social media visual for HireUA.
 
-Дані з форми ContentBriefs:
+FORMAT AND QUALITY:
+- Vertical portrait advertising image, 1024x1536 / 1080x1920 style.
+- Ultra high quality, premium marketing agency level.
+- Sharp details, clean composition, professional lighting, modern color grading.
+- Must look like a real paid advertising creative for Meta / Instagram / LinkedIn, not like a cheap template.
+- Modern Ukrainian recruitment and business promotion platform style.
+
+IMPORTANT TEXT RULES:
+- Do NOT generate large blocks of text inside the image.
+- Do NOT create unreadable letters, fake words, distorted typography or random signs.
+- If text is necessary, use only very short clean visual hints, but prefer leaving clear empty areas for later text overlay.
+- Leave free space in the top-left corner for the automatic watermark @UkraineHire.
+
+BRAND STYLE:
+- Brand: HireUA.
+- Mood: trustworthy, modern, professional, helpful, optimistic.
+- Visual direction: premium HR-tech, recruitment agency, business growth, Ukrainian market.
+- Use clean corporate green / blue / white accents where appropriate.
+- Do not use generic robots, plastic-looking mascots, childish cartoon characters or low-quality clipart.
+
+TIM CHARACTER RULES:
+- Use Tim only if the client asks for Tim or if it clearly fits the task.
+- Tim is a young Ukrainian HR assistant, friendly and professional.
+- He wears a clean white vyshyvanka and a small HireUA badge.
+- Tim should look like a premium 3D / realistic brand character, not a generic robot.
+
+COMPOSITION RULES:
+- Clear focal point.
+- Premium commercial layout.
+- Realistic environment or polished 3D environment.
+- No clutter.
+- No distorted faces, hands, logos or unreadable interface elements.
+- No random extra people unless useful for the advertising idea.
+
+CLIENT TASK / SOURCE DATA:
 {content_brief_text(data)}
 
-Історія / подія для серії Reels/Shorts:
+STORY / REELS SERIES CONTEXT:
 {story}
 
-Правки або додаткові побажання клієнта:
+CLIENT EDITS OR ADDITIONAL REQUESTS:
 {client_comment}
 
-Якщо клієнт просив використати Тіма — додай дружнього AI HR-помічника Тіма у стилі HireUA.
+Final goal: produce a visually strong advertising image that can be used as a professional HireUA banner after text overlay is added separately.
 """
 
     try:
         response = await asyncio.to_thread(
             openai_client.images.generate,
-            model="gpt-image-1",
+            model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1"),
             prompt=prompt,
             size="1024x1536",
+            quality="high",
         )
 
         image_base64 = response.data[0].b64_json
