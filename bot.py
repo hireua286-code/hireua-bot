@@ -307,57 +307,32 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "data": {},
         }
         await query.message.reply_text(
-            "📢 Просування бізнесу / бренду
-
-"
-            "Зараз заповнимо короткий бриф для рекламної кампанії HireUA.
-
-"
+            "📢 Просування бізнесу / бренду"
+            "Зараз заповнимо короткий бриф для рекламної кампанії HireUA."
             "🏢 Вкажіть назву компанії / бренду:"
         )
         return
 
     if data == "client_prices":
         await query.message.reply_text(
-            "💰 Тарифи HireUA
-
-"
-            "🆓 Текстові вакансії — безкоштовно в Telegram каналах HireUA.
-"
-            "🆓 Текстові резюме — безкоштовно в Telegram каналах HireUA.
-
-"
-            "🚀 Start — 4500 грн / 7 днів
-"
-            "• Telegram — 3 публікації щодня
-"
-            "• Instagram — 3 публікації щодня
-"
-            "• Facebook — 3 публікації щодня
-"
-            "• YouTube Shorts — 3 публікації щодня (відео)
-"
-            "• Разом: 84 публікації за 7 днів
-
-"
-            "💼 Business — 7500 грн / 7 днів
-"
-            "• Telegram — 6 публікацій щодня
-"
-            "• Instagram — 6 публікацій щодня
-"
-            "• Facebook — 6 публікацій щодня
-"
-            "• YouTube Shorts — 6 публікацій щодня (відео)
-"
-            "• Разом: 168 публікацій за 7 днів
-
-"
-            "У пакетах Start та Business вже входять банери, Reels, Shorts, відео з Тімом та супровід зі створення контенту.
-
-"
+            "💰 Тарифи HireUA\n\n"
+            "🆓 Текстові вакансії — безкоштовно в Telegram каналах HireUA.\n"
+            "🆓 Текстові резюме — безкоштовно в Telegram каналах HireUA.\n\n"
+            "🚀 Start — 4500 грн / 7 днів\n"
+            "• Telegram — 3 публікації щодня\n"
+            "• Instagram — 3 публікації щодня\n"
+            "• Facebook — 3 публікації щодня\n"
+            "• YouTube Shorts — 3 публікації щодня (відео)\n"
+            "• Разом: 84 публікації за 7 днів\n\n"
+            "💼 Business — 7500 грн / 7 днів\n"
+            "• Telegram — 6 публікацій щодня\n"
+            "• Instagram — 6 публікацій щодня\n"
+            "• Facebook — 6 публікацій щодня\n"
+            "• YouTube Shorts — 6 публікацій щодня (відео)\n"
+            "• Разом: 168 публікацій за 7 днів\n\n"
+            "У пакетах Start та Business вже входять банери, Reels, Shorts, відео з Тімом та супровід зі створення контенту.\n\n"
             "Для запуску напишіть HR менеджеру: @HireUkraine"
-        )
+       )
         return
 
     await query.message.reply_text("Оберіть потрібний розділ нижче 👇", reply_markup=client_main_keyboard())
