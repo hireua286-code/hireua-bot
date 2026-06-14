@@ -209,6 +209,103 @@ def append_client_to_sheet(data: dict, tariff: str = "", user=None):
         print("GOOGLE CLIENTS ERROR:", e, flush=True)
 
 
+def user_has_paid_package(user) -> bool:
+    """Перевіряє доступ клієнта до створення банерів/Reels через вкладку Clients."""
+    try:
+        if not user:
+            return False
+
+        if int(getattr(user, "id", 0)) == OWNER_ID:
+            return True
+
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("Clients")
+        rows = sheet.get_all_records()
+        user_id = str(user.id).strip()
+
+        for row in rows:
+            telegram_id = str(
+                row.get("telegram_id")
+                or row.get("Telegram ID")
+                or row.get("telegram id")
+                or row.get("id")
+                or ""
+            ).strip()
+            status = str(
+                row.get("status")
+                or row.get("Status")
+                or row.get("Статус")
+                or ""
+            ).strip().lower()
+
+            if telegram_id == user_id and status == "paid":
+                return True
+
+        return False
+    except Exception as e:
+        print("GOOGLE CLIENTS ACCESS ERROR:", e, flush=True)
+        return False
+
+
+def paid_required_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("/UsersStart — пакет Start", callback_data="vacancy_start")],
+        [InlineKeyboardButton("/UsersBusiness — пакет Business", callback_data="vacancy_business")],
+    ])
+
+
+async def deny_unpaid_content_access(message):
+    await message.reply_text(
+        "🔒 Створення банерів та Reels доступне клієнтам з активним пакетом Start або Business.\n\n"
+        "Для активації пакета зв'яжіться з адміністратором:\n\n"
+        "@HireUkraine",
+        reply_markup=paid_required_keyboard(),
+    )
+
+
+async def start_paid_content_chat(update: Update, context: ContextTypes.DEFAULT_TYPE, order_type: str = "banner"):
+    """Запускає вільний GPT-діалог для створення банера або Reels без повторного брифа."""
+    message = update.message if update.message else update.callback_query.message
+    user = update.effective_user
+
+    if not user_has_paid_package(user):
+        await deny_unpaid_content_access(message)
+        return
+
+    if order_type == "reels_series":
+        context.user_data["tim_content_order"] = {
+            "tariff": "Reels / Shorts",
+            "order_type": "reels_series",
+            "data": {},
+            "status": "В РОБОТІ",
+            "last_files": [],
+            "client_edits": [],
+            "publish_text": "",
+            "waiting_story": True,
+        }
+        await message.reply_text(
+            "🎬 Опишіть ідею Reels / Shorts одним повідомленням.\n\n"
+            "Наприклад: відкриття магазину, вакансія, акція, знижка, місто, стиль, що має побачити клієнт.\n\n"
+            "Після цього я підготую серію з 5 банерів 1080×1920."
+        )
+        return
+
+    context.user_data["tim_content_order"] = {
+        "tariff": "Банер",
+        "order_type": "banner",
+        "data": {},
+        "status": "В РОБОТІ",
+        "last_files": [],
+        "client_edits": [],
+        "publish_text": "",
+    }
+    await message.reply_text(
+        "🖼 Опишіть, який банер потрібно створити.\n\n"
+        "Наприклад: банер для вакансії касира в Києві, зарплата, графік, контакти, стиль, кольори, акція або відкриття.\n\n"
+        "Після цього я підготую перший варіант."
+    )
+
+
 def append_resume_to_sheet(data: dict):
     try:
         now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
@@ -385,16 +482,20 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if data in ("content_banner", "content_reels", "content_start", "content_business"):
+    if data == "content_banner":
+        await start_paid_content_chat(update, context, order_type="banner")
+        return
+
+    if data == "content_reels":
+        await start_paid_content_chat(update, context, order_type="reels_series")
+        return
+
+    if data in ("content_start", "content_business"):
         tariff_map = {
-            "content_banner": "Банер — 500 грн",
-            "content_reels": "Серія банерів для Reels / Shorts — 800 грн",
             "content_start": "Start",
             "content_business": "Business",
         }
         order_type_map = {
-            "content_banner": "banner",
-            "content_reels": "reels_series",
             "content_start": "campaign",
             "content_business": "campaign",
         }
@@ -546,33 +647,11 @@ async def start_users_business_form(update: Update, context: ContextTypes.DEFAUL
 
 
 async def start_promo_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["client_form"] = {
-        "type": "content_order",
-        "tariff": "Банер",
-        "order_type": "banner",
-        "step": "content_company",
-        "data": {},
-    }
-    await update.message.reply_text(
-        "🖼 Банер\n\n"
-        "Зараз заповнимо короткий бриф для рекламного банера.\n\n"
-        "🏢 Вкажіть назву компанії / бренду:"
-    )
+    await start_paid_content_chat(update, context, order_type="banner")
 
 
 async def start_reels_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["client_form"] = {
-        "type": "content_order",
-        "tariff": "Reels / Shorts",
-        "order_type": "reels_series",
-        "step": "content_company",
-        "data": {},
-    }
-    await update.message.reply_text(
-        "🎬 Reels / Shorts\n\n"
-        "Зараз заповнимо короткий бриф для Reels / Shorts.\n\n"
-        "🏢 Вкажіть назву компанії / бренду:"
-    )
+    await start_paid_content_chat(update, context, order_type="reels_series")
 
 
 @web_app.route("/")
