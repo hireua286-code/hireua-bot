@@ -272,6 +272,11 @@ async def start_paid_content_chat(update: Update, context: ContextTypes.DEFAULT_
         await deny_unpaid_content_access(message)
         return
 
+    # ВАЖНО: режим создания контента должен работать как GPT-чат.
+    # Если у пользователя раньше висела анкета вакансии/пакета, она не должна
+    # перехватывать следующие сообщения после /Promo или /Reels.
+    context.user_data.pop("client_form", None)
+
     if order_type == "reels_series":
         context.user_data["tim_content_order"] = {
             "tariff": "Reels / Shorts",
@@ -437,6 +442,7 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "vacancy_free":
+        context.user_data.pop("tim_content_order", None)
         context.user_data["client_form"] = {
             "type": "vacancy",
             "tariff": "Безкоштовна текстова вакансія",
@@ -447,6 +453,7 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "vacancy_start":
+        context.user_data.pop("tim_content_order", None)
         context.user_data["client_form"] = {
             "type": "vacancy_promo",
             "tariff": "Start",
@@ -461,6 +468,7 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "vacancy_business":
+        context.user_data.pop("tim_content_order", None)
         context.user_data["client_form"] = {
             "type": "vacancy_promo",
             "tariff": "Business",
@@ -491,6 +499,7 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data in ("content_start", "content_business"):
+        context.user_data.pop("tim_content_order", None)
         tariff_map = {
             "content_start": "Start",
             "content_business": "Business",
@@ -599,6 +608,7 @@ def detect_tim_service_intent(text: str):
 
 
 async def start_free_vacancy_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("tim_content_order", None)
     context.user_data["client_form"] = {
         "type": "vacancy",
         "tariff": "Безкоштовна текстова вакансія",
@@ -609,6 +619,7 @@ async def start_free_vacancy_form(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def start_resume_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("tim_content_order", None)
     context.user_data["client_form"] = {
         "type": "resume",
         "tariff": "Резюме",
@@ -619,6 +630,7 @@ async def start_resume_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_users_start_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("tim_content_order", None)
     context.user_data["client_form"] = {
         "type": "vacancy_promo",
         "tariff": "Start",
@@ -633,6 +645,7 @@ async def start_users_start_form(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def start_users_business_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("tim_content_order", None)
     context.user_data["client_form"] = {
         "type": "vacancy_promo",
         "tariff": "Business",
@@ -1793,10 +1806,14 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.to_thread(save_user_to_sheet, update, update.message.text or "")
-    if await client_form_text(update, context):
+
+    # Если включен режим создания баннера/Reels, он имеет приоритет над всеми анкетами.
+    # Иначе старые незакрытые client_form могут начать задавать вопросы вакансии
+    # вместо того, чтобы Тім работал как обычный GPT-чат по контенту.
+    if await tim_content_ai_chat(update, context):
         return
 
-    if await tim_content_ai_chat(update, context):
+    if await client_form_text(update, context):
         return
 
     if not admin_only(update):
