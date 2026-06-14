@@ -1140,7 +1140,7 @@ async def handle_content_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         return False
 
     photo_path = await download_telegram_photo_to_temp(context, update.message.photo[-1].file_id)
-    order["last_uploaded_image"] = photo_path
+    remember_image(order, photo_path, "client_uploaded_image")
     order["stage"] = "image_uploaded_waiting_edit"
 
     caption = (update.message.caption or "").strip()
@@ -1150,7 +1150,7 @@ async def handle_content_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         path = await edit_tim_image(update, context, base_image, caption, data=order.get("data", {}), story=order.get("story", ""))
         if path:
             order["last_files"] = [path]
-            order["last_uploaded_image"] = path
+            remember_image(order, path, "generated_banner")
             order["stage"] = "generated"
             await send_tim_generated_files(
                 update,
@@ -1767,6 +1767,77 @@ def has_concept_choice(text: str) -> bool:
     ]
     return any(m in value for m in markers)
 
+
+# STAGE 3: памʼять зображень у креативному діалозі.
+# Тім запамʼятовує завантажені та згенеровані варіанти, щоб клієнт міг писати:
+# "поверни попередній", "перероби перший варіант", "зроби як у другому".
+MAX_IMAGE_MEMORY = 8
+
+def remember_image(order: dict, path: str, note: str = ""):
+    if not order or not path or not os.path.exists(path):
+        return
+
+    history = order.setdefault("image_history", [])
+
+    # Не дублюємо той самий файл підряд.
+    if history and history[-1].get("path") == path:
+        order["last_uploaded_image"] = path
+        return
+
+    history.append({
+        "path": path,
+        "note": note or "",
+        "created_at": datetime.now(KYIV_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
+    # Тримаємо тільки останні варіанти, щоб не роздувати памʼять.
+    if len(history) > MAX_IMAGE_MEMORY:
+        del history[:-MAX_IMAGE_MEMORY]
+
+    order["last_uploaded_image"] = path
+
+
+def get_image_from_memory(order: dict, client_text: str = ""):
+    history = order.get("image_history") or []
+    if not history:
+        return None
+
+    value = (client_text or "").lower().replace("ё", "е")
+
+    # Явне повернення до попереднього варіанту.
+    if any(word in value for word in [
+        "поперед", "предыдущ", "прошл", "верни назад", "поверни назад",
+        "старый", "старий", "до цього", "до этого",
+    ]):
+        if len(history) >= 2:
+            return history[-2].get("path")
+        return history[-1].get("path")
+
+    # Вибір варіанту за номером.
+    number_words = {
+        "1": 1, "перш": 1, "перв": 1,
+        "2": 2, "друг": 2, "втор": 2,
+        "3": 3, "трет": 3,
+        "4": 4, "четвер": 4,
+        "5": 5, "пят": 5, "п'ят": 5,
+    }
+
+    if any(word in value for word in ["варіант", "вариант", "банер", "баннер", "картин", "зображ"]):
+        for marker, number in number_words.items():
+            if marker in value and len(history) >= number:
+                return history[number - 1].get("path")
+
+    return history[-1].get("path")
+
+
+def wants_previous_image(text: str) -> bool:
+    value = (text or "").lower().replace("ё", "е")
+    return any(word in value for word in [
+        "поверни поперед", "верни предыдущ", "предыдущий вариант",
+        "попередній варіант", "прошлый вариант", "старый вариант",
+        "покажи поперед", "покажи предыдущ",
+    ])
+
 async def send_tim_generated_files(update: Update, files: list, caption: str):
     good_files = [f for f in files or [] if f and os.path.exists(f)]
     if not good_files:
@@ -1881,6 +1952,7 @@ async def generate_first_content_version(update: Update, context: ContextTypes.D
     path = await generate_tim_banner(update, context, data, client_comment=data.get("wishes", ""))
     if path:
         order["last_files"] = [path]
+        remember_image(order, path, "first_generated_banner")
         await send_tim_generated_files(
             update,
             [path],
@@ -1970,7 +2042,7 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
             path = await generate_tim_banner(update, context, data, client_comment=brief)
             if path:
                 order["last_files"] = [path]
-                order["last_uploaded_image"] = path
+                remember_image(order, path, "generated_banner")
                 order["stage"] = "generated"
                 await send_tim_generated_files(
                     update,
@@ -1993,7 +2065,7 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
             path = await generate_tim_banner(update, context, data, client_comment=final_prompt)
             if path:
                 order["last_files"] = [path]
-                order["last_uploaded_image"] = path
+                remember_image(order, path, "generated_banner")
                 order["stage"] = "generated"
                 await send_tim_generated_files(
                     update,
@@ -2037,6 +2109,8 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if path:
                     paths.append(path)
             order["last_files"] = paths
+            for _p in paths:
+                remember_image(order, _p, "generated_reels_slide")
             order["stage"] = "generated"
             await send_tim_generated_files(
                 update,
@@ -2063,6 +2137,8 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if path:
                     paths.append(path)
             order["last_files"] = paths
+            for _p in paths:
+                remember_image(order, _p, "generated_reels_slide")
             order["stage"] = "generated"
             await send_tim_generated_files(
                 update,
@@ -2080,6 +2156,27 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         order["story"] = story
         await update.message.reply_text(add_generation_hint(story))
         return True
+
+    # 6) Після генерації: Тім памʼятає попередні варіанти.
+    # Якщо клієнт просить повернути попередній / старий варіант — просто показуємо його, а не генеруємо новий.
+    if wants_previous_image(text):
+        remembered_path = get_image_from_memory(order, text)
+        if remembered_path and os.path.exists(remembered_path):
+            order["last_files"] = [remembered_path]
+            order["last_uploaded_image"] = remembered_path
+            await send_tim_generated_files(
+                update,
+                [remembered_path],
+                "Повернув попередній варіант ✅\n\n"
+                "Якщо потрібно — напишіть правку до цього варіанту.\n"
+                "Якщо все добре — напишіть: УЗГОДЖЕНО Клієнтом ✅"
+            )
+            return True
+
+    # Якщо клієнт посилається на конкретний варіант, беремо його як основу для наступної правки.
+    remembered_base = get_image_from_memory(order, text)
+    if remembered_base and os.path.exists(remembered_base):
+        order["last_uploaded_image"] = remembered_base
 
     # 6) Після генерації: будь-які повідомлення — це правки до готових матеріалів або текст до публікації.
     order.setdefault("client_edits", []).append(text)
@@ -2119,7 +2216,7 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if path:
         order["last_files"] = [path]
-        order["last_uploaded_image"] = path
+        remember_image(order, path, "edited_banner")
         order["stage"] = "generated"
         await send_tim_generated_files(
             update,
