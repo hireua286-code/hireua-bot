@@ -1,3 +1,17 @@
+
+# === STAGE 5 PLAN (to be integrated) ===
+# Publication windows:
+# Morning 08:00-11:30
+# Day 12:00-16:30
+# Evening 17:00-22:00
+# Start: 1/1/1
+# Business: 2/2/2
+# Random slot selection inside window
+# Platform min gaps:
+# Telegram 5m, Facebook 15m, Instagram 20m, YouTube 20m
+# Admin command: /time
+# =======================================
+
 import os
 import json
 import base64
