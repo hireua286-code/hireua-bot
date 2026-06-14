@@ -1693,6 +1693,45 @@ async def generate_tim_banner(update: Update, context: ContextTypes.DEFAULT_TYPE
     return await generate_tim_image_from_text(update, context, data, client_comment=client_comment, slide_number=slide_number, story=story)
 
 
+
+GENERATE_WORDS = [
+    "генеруй", "згенеруй", "сгенерируй",
+    "створи", "создай",
+    "роби", "делай",
+    "давай робити", "давай делать",
+    "погнали",
+    "ок роби", "ок делай",
+    "так роби", "так делай",
+    "узгоджено", "согласовано",
+]
+
+FINAL_APPROVAL_WORDS = [
+    "узгоджено клієнтом",
+    "узгоджено клиентом",
+    "согласовано клиентом",
+]
+
+
+def is_generate_request(text: str) -> bool:
+    value = (text or "").lower().replace("ё", "е").strip()
+    return any(word in value for word in GENERATE_WORDS)
+
+
+def is_final_client_approval(text: str) -> bool:
+    value = (text or "").lower().replace("ё", "е").strip()
+    return any(word in value for word in FINAL_APPROVAL_WORDS)
+
+
+def add_generation_hint(message: str) -> str:
+    hint = (
+        "\n\n━━━━━━━━━━━━━━\n"
+        "✅ Якщо все підходить — напишіть: «Генеруй», «Роби», «Створи» або «Узгоджено».\n"
+        "✏️ Якщо хочете щось змінити — просто напишіть правку своїми словами."
+    )
+    if "генеруй" in (message or "").lower() and "правк" in (message or "").lower():
+        return message
+    return (message or "").rstrip() + hint
+
 async def send_tim_generated_files(update: Update, files: list, caption: str):
     good_files = [f for f in files or [] if f and os.path.exists(f)]
     if not good_files:
@@ -1715,7 +1754,7 @@ async def build_creative_plan(order_type: str, idea: str, extra: str = "") -> st
             "Не проси клієнта писати довгий промпт. Сам запропонуй 3 сильні концепції ролика. "
             "Пиши українською або російською залежно від мови клієнта. "
             "Формат відповіді: короткий вступ, 1️⃣ концепція, 2️⃣ концепція, 3️⃣ концепція, "
-            "потім питання: 'Яку концепцію беремо або що змінити?'"
+            "потім обовʼязково поясни клієнту: якщо все підходить — нехай напише 'Генеруй', 'Роби', 'Створи' або 'Узгоджено'; якщо хоче змінити — нехай просто напише правку."
         )
     else:
         task = (
@@ -1723,7 +1762,7 @@ async def build_creative_plan(order_type: str, idea: str, extra: str = "") -> st
             "Не проси клієнта писати довгий промпт. Сам запропонуй 3 сильні концепції банера. "
             "Пиши українською або російською залежно від мови клієнта. "
             "Формат відповіді: короткий вступ, 1️⃣ концепція, 2️⃣ концепція, 3️⃣ концепція, "
-            "потім питання: 'Який варіант беремо або що змінити?'"
+            "потім обовʼязково поясни клієнту: якщо все підходить — нехай напише 'Генеруй', 'Роби', 'Створи' або 'Узгоджено'; якщо хоче змінити — нехай просто напише правку."
         )
 
     response = await asyncio.to_thread(
@@ -1749,7 +1788,7 @@ async def build_reels_story(idea: str, concept_choice: str, edits: str = "") -> 
                     "Ти креативний продюсер HireUA. На основі ідеї та вибраної концепції створи сценарій Reels/Shorts з 5 кадрів. "
                     "Не генеруй зображення. Потрібен тільки сценарій для погодження. "
                     "Кожен кадр має містити: що бачимо, короткий текст на екрані, настрій/стиль. "
-                    "Пиши зрозуміло, як для клієнта. Наприкінці запитай: 'Підходить? Якщо так — напишіть УЗГОДЖЕНО. Якщо ні — напишіть правки.'"
+                    "Пиши зрозуміло, як для клієнта. Наприкінці обовʼязково поясни: якщо все підходить — напишіть 'Генеруй', 'Роби', 'Створи' або 'Узгоджено'; якщо хочете змінити — просто напишіть правку."
                 ),
             },
             {
@@ -1772,7 +1811,7 @@ async def build_banner_brief(idea: str, concept_choice: str, edits: str = "") ->
                 "content": (
                     "Ти артдиректор HireUA. На основі ідеї та вибраної концепції створи короткий фінальний опис банера для погодження. "
                     "Не генеруй зображення. Опиши композицію, головний візуал, стиль, акценти, що має відчувати клієнт. "
-                    "Наприкінці запитай: 'Підходить? Якщо так — напишіть УЗГОДЖЕНО. Якщо ні — напишіть правки.'"
+                    "Наприкінці обовʼязково поясни: якщо все підходить — напишіть 'Генеруй', 'Роби', 'Створи' або 'Узгоджено'; якщо хочете змінити — просто напишіть правку."
                 ),
             },
             {
@@ -1854,7 +1893,7 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
     stage = order.get("stage") or ("awaiting_idea" if not order.get("last_files") else "generated")
 
     # Фінальне погодження вже готових матеріалів для передачі адміну.
-    if stage == "generated" and "УЗГОДЖЕНО" in upper_text and "КЛІЄНТ" in upper_text:
+    if stage == "generated" and is_final_client_approval(text):
         order["status"] = "УЗГОДЖЕНО Клієнтом ✅"
         update_content_brief_status_in_sheet(update.effective_user.id, order["status"])
         await send_final_content_to_admin(update, context, order)
@@ -1872,13 +1911,11 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Дякую ✅ Зараз запропоную кілька ідей.")
         concepts = await build_creative_plan(order_type, text)
         order["concepts"] = concepts
-        await update.message.reply_text(
-            concepts +
-            "\n\nНапишіть номер варіанту або коротко, що змінити."
-        )
+        await update.message.reply_text(add_generation_hint(concepts))
         return True
 
-    # 2) Для банера: клієнт вибрав концепцію або дав правки — готуємо фінальний опис для погодження.
+    # 2) Для банера: клієнт вибрав концепцію або дав правки — готуємо фінальний опис.
+    # Генерацію на цьому етапі ще не запускаємо: спочатку показуємо клієнту фінальний задум.
     if order_type != "reels_series" and stage == "waiting_concept_choice":
         order.setdefault("client_edits", []).append(text)
         idea = order.get("idea", "")
@@ -1886,13 +1923,13 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         brief = await build_banner_brief(idea, text, edits)
         order["final_brief"] = brief
         order["stage"] = "waiting_banner_approval"
-        await update.message.reply_text(brief)
+        await update.message.reply_text(add_generation_hint(brief))
         return True
 
     # 3) Для банера: правки до опису або погодження. Генеруємо тільки після УЗГОДЖЕНО.
     if order_type != "reels_series" and stage == "waiting_banner_approval":
-        if "УЗГОДЖЕНО" in upper_text:
-            await update.message.reply_text("✅ Погоджено. Готую банер.")
+        if is_generate_request(text):
+            await update.message.reply_text("✅ Прийняв команду. Готую банер.")
             final_prompt = order.get("final_brief") or order.get("idea", "")
             path = await generate_tim_banner(update, context, data, client_comment=final_prompt)
             if path:
@@ -1913,10 +1950,11 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         edits = "\n".join(order.get("client_edits", []))
         brief = await build_banner_brief(idea, order.get("final_brief", ""), edits)
         order["final_brief"] = brief
-        await update.message.reply_text(brief)
+        await update.message.reply_text(add_generation_hint(brief))
         return True
 
     # 4) Для Reels: клієнт вибрав концепцію або дав правки — готуємо сценарій з 5 кадрів.
+    # Генерацію кадрів запускаємо тільки після явної команди клієнта.
     if order_type == "reels_series" and stage == "waiting_concept_choice":
         order.setdefault("client_edits", []).append(text)
         idea = order.get("idea", "")
@@ -1924,13 +1962,13 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         story = await build_reels_story(idea, text, edits)
         order["story"] = story
         order["stage"] = "waiting_reels_approval"
-        await update.message.reply_text(story)
+        await update.message.reply_text(add_generation_hint(story))
         return True
 
     # 5) Для Reels: правки до сценарію або погодження. Кадри генеруємо тільки після УЗГОДЖЕНО.
     if order_type == "reels_series" and stage == "waiting_reels_approval":
-        if "УЗГОДЖЕНО" in upper_text:
-            await update.message.reply_text("✅ Сценарій погоджено. Готую серію з 5 кадрів.")
+        if is_generate_request(text):
+            await update.message.reply_text("✅ Прийняв команду. Готую серію з 5 кадрів.")
             paths = []
             story = order.get("story", "")
             for i in range(1, 6):
@@ -1954,7 +1992,7 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         edits = "\n".join(order.get("client_edits", []))
         story = await build_reels_story(idea, order.get("story", ""), edits)
         order["story"] = story
-        await update.message.reply_text(story)
+        await update.message.reply_text(add_generation_hint(story))
         return True
 
     # 6) Після генерації: будь-які повідомлення — це правки до готових матеріалів або текст до публікації.
