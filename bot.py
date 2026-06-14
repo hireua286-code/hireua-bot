@@ -1117,10 +1117,11 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✏️ Побажання: {data.get('promo_wishes')}"
             )
 
-            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
-            await update.message.reply_text(
-                "✅ Заявка Start / Business прийнята.\n"
-                "Ми перевіримо інформацію та зв'яжемось з вами."
+           await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+           append_vacancy_to_sheet(data, form.get("tariff", ""))
+
+           await update.message.reply_text(
+               "✅ Заявка Start / Business прийнята.\n"
             )
 
             context.user_data.pop("client_form", None)
