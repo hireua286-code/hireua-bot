@@ -290,10 +290,10 @@ def vacancy_tariffs_keyboard():
 
 def promo_order_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 Start", callback_data="content_start")],
-        [InlineKeyboardButton("💼 Business", callback_data="content_business")],
-        [InlineKeyboardButton("🖼 Банер", callback_data="content_banner")],
-        [InlineKeyboardButton("🎬 Reels / Shorts", callback_data="content_reels")],
+        [InlineKeyboardButton("🖼 Банер — 500 грн", callback_data="content_banner")],
+        [InlineKeyboardButton("🎬 Серія банерів для Reels / Shorts — 800 грн", callback_data="content_reels")],
+        [InlineKeyboardButton("🚀 Start — просування 7 днів", callback_data="content_start")],
+        [InlineKeyboardButton("💼 Business — активне просування 7 днів", callback_data="content_business")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="client_back")],
     ])
 
@@ -1117,11 +1117,12 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✏️ Побажання: {data.get('promo_wishes')}"
             )
 
-           await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
-           append_vacancy_to_sheet(data, form.get("tariff", ""))
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+            append_vacancy_to_sheet(data, form.get("tariff", ""))
 
-           await update.message.reply_text(
-               "✅ Заявка Start / Business прийнята.\n"
+            await update.message.reply_text(
+                "✅ Заявка Start / Business прийнята.\n"
+                "Ми перевіримо інформацію та зв'яжемось з вами."
             )
 
             context.user_data.pop("client_form", None)
