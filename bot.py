@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 from uuid import uuid4
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
@@ -31,6 +32,14 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from openai import OpenAI
 import gspread
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:
+    Image = None
+    ImageDraw = None
+    ImageFont = None
+
 from handlers.client import client_main_keyboard, client_buttons
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -199,6 +208,62 @@ def append_resume_to_sheet(data: dict):
         print("GOOGLE RESUME ERROR:", e, flush=True)
 
 
+def append_content_brief_to_sheet(data: dict, tariff: str = "", user_id: int = None, order_type: str = ""):
+    try:
+        now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("ContentBriefs")
+
+        sheet.append_row([
+            now,
+            user_id or "",
+            tariff,
+            order_type,
+            data.get("company", ""),
+            data.get("about", ""),
+            data.get("goal", ""),
+            data.get("city", ""),
+            data.get("address", ""),
+            data.get("main_info", ""),
+            data.get("benefits", ""),
+            data.get("audience", ""),
+            data.get("tim", ""),
+            data.get("style", ""),
+            data.get("music", ""),
+            data.get("urgent", ""),
+            data.get("materials", ""),
+            data.get("contacts", ""),
+            data.get("wishes", ""),
+            "НА ПОГОДЖЕННІ",
+            "",
+        ])
+    except Exception as e:
+        print("GOOGLE CONTENT BRIEF ERROR:", e, flush=True)
+
+
+def update_content_brief_status_in_sheet(user_id: int, status: str):
+    try:
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("ContentBriefs")
+        values = sheet.get_all_values()
+        if not values:
+            return
+
+        # Шукаємо останній рядок цього користувача. За нашою структурою user_id у 2 колонці.
+        target_row = None
+        for idx in range(len(values), 1, -1):
+            row = values[idx - 1]
+            if len(row) > 1 and str(row[1]) == str(user_id):
+                target_row = idx
+                break
+
+        if target_row:
+            sheet.update_cell(target_row, 20, status)
+            sheet.update_cell(target_row, 21, datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M"))
+    except Exception as e:
+        print("GOOGLE CONTENT STATUS ERROR:", e, flush=True)
+
+
 # ---------- CLIENT KEYBOARDS / BUTTONS ----------
 # Цей блок спеціально дублює клієнтську логіку всередині bot.py,
 # щоб Start / Business гарантовано запускали бриф vacancy_promo.
@@ -225,6 +290,8 @@ def vacancy_tariffs_keyboard():
 
 def promo_order_keyboard():
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🖼 Банер — 500 грн", callback_data="content_banner")],
+        [InlineKeyboardButton("🎬 Серія банерів для Reels / Shorts — 800 грн", callback_data="content_reels")],
         [InlineKeyboardButton("🚀 Start — просування 7 днів", callback_data="content_start")],
         [InlineKeyboardButton("💼 Business — активне просування 7 днів", callback_data="content_business")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="client_back")],
@@ -295,14 +362,23 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if data in ("content_start", "content_business"):
+    if data in ("content_banner", "content_reels", "content_start", "content_business"):
         tariff_map = {
+            "content_banner": "Банер — 500 грн",
+            "content_reels": "Серія банерів для Reels / Shorts — 800 грн",
             "content_start": "Start",
             "content_business": "Business",
+        }
+        order_type_map = {
+            "content_banner": "banner",
+            "content_reels": "reels_series",
+            "content_start": "campaign",
+            "content_business": "campaign",
         }
         context.user_data["client_form"] = {
             "type": "content_order",
             "tariff": tariff_map.get(data, "Просування"),
+            "order_type": order_type_map.get(data, "banner"),
             "step": "content_company",
             "data": {},
         }
@@ -955,33 +1031,27 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["wishes"] = text
             form["data"] = data
 
-            admin_text = (
-                "📥 Нове замовлення контенту\n\n"
-                f"Тариф: {form.get('tariff')}\n"
-                f"🏢 Компанія: {data.get('company')}\n"
-                f"📋 Про компанію: {data.get('about')}\n"
-                f"🎯 Що просуваємо: {data.get('goal')}\n"
-                f"📍 Місто: {data.get('city')}\n"
-                f"📍 Адреса / локація: {data.get('address')}\n"
-                f"📝 Основна інформація: {data.get('main_info')}\n"
-                f"🎁 Переваги / умови: {data.get('benefits')}\n"
-                f"🎯 Цільова аудиторія: {data.get('audience')}\n"
-                f"🤖 Тім у контенті: {data.get('tim')}\n"
-                f"🎨 Стиль: {data.get('style')}\n"
-                f"🎵 Музика: {data.get('music')}\n"
-                f"🔥 Терміново: {data.get('urgent')}\n"
-                f"🖼 Матеріали: {data.get('materials')}\n"
-                f"📞 Контакти: {data.get('contacts')}\n"
-                f"✏️ Побажання: {data.get('wishes')}"
+            order = {
+                "tariff": form.get("tariff", ""),
+                "order_type": form.get("order_type", "banner"),
+                "data": data,
+                "status": "НА ПОГОДЖЕННІ",
+                "last_files": [],
+                "client_edits": [],
+                "publish_text": "",
+            }
+
+            append_content_brief_to_sheet(
+                data=data,
+                tariff=order["tariff"],
+                user_id=update.effective_user.id,
+                order_type=order["order_type"],
             )
 
-            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
-            await update.message.reply_text(
-                "✅ Заявка на контент прийнята.\n"
-                "Ми перевіримо інформацію та зв'яжемось з вами."
-            )
-
+            context.user_data["tim_content_order"] = order
             context.user_data.pop("client_form", None)
+
+            await generate_first_content_version(update, context, order)
             return True
 
     # ---------- START / BUSINESS: ВАКАНСІЯ + ПРОСУВАННЯ ----------
@@ -1113,6 +1183,279 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return False
 
 
+WATERMARK_TEXT = "@UkraineHire"
+
+
+def add_watermark_to_image(image_path: str) -> str:
+    """Ставить водяний знак @UkraineHire на кожен банер."""
+    if Image is None or ImageDraw is None:
+        return image_path
+
+    try:
+        img = Image.open(image_path).convert("RGBA")
+        draw = ImageDraw.Draw(img)
+        width, height = img.size
+
+        font_size = max(28, int(width * 0.04))
+        font = None
+        for font_path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arial.ttf"):
+            try:
+                font = ImageFont.truetype(font_path, font_size)
+                break
+            except Exception:
+                pass
+        if font is None:
+            font = ImageFont.load_default()
+
+        x = int(width * 0.035)
+        y = int(height * 0.025)
+        padding = max(12, int(width * 0.015))
+        bbox = draw.textbbox((x, y), WATERMARK_TEXT, font=font)
+        rect = (bbox[0] - padding, bbox[1] - padding, bbox[2] + padding, bbox[3] + padding)
+
+        overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        overlay_draw.rounded_rectangle(rect, radius=18, fill=(0, 0, 0, 95))
+        img = Image.alpha_composite(img, overlay)
+        draw = ImageDraw.Draw(img)
+        draw.text((x + 2, y + 2), WATERMARK_TEXT, fill=(0, 0, 0, 140), font=font)
+        draw.text((x, y), WATERMARK_TEXT, fill=(255, 255, 255, 235), font=font)
+
+        output_path = image_path.replace(".png", "_watermark.png")
+        img.save(output_path)
+        return output_path
+    except Exception as e:
+        print("WATERMARK ERROR:", e, flush=True)
+        return image_path
+
+
+def content_brief_text(data: dict) -> str:
+    return (
+        f"Компанія: {data.get('company', '')}\n"
+        f"Про компанію: {data.get('about', '')}\n"
+        f"Що просуваємо: {data.get('goal', '')}\n"
+        f"Місто: {data.get('city', '')}\n"
+        f"Адреса / локація: {data.get('address', '')}\n"
+        f"Основна інформація: {data.get('main_info', '')}\n"
+        f"Переваги / умови: {data.get('benefits', '')}\n"
+        f"Цільова аудиторія: {data.get('audience', '')}\n"
+        f"Тім у контенті: {data.get('tim', '')}\n"
+        f"Стиль: {data.get('style', '')}\n"
+        f"Музика: {data.get('music', '')}\n"
+        f"Терміново: {data.get('urgent', '')}\n"
+        f"Матеріали: {data.get('materials', '')}\n"
+        f"Контакти: {data.get('contacts', '')}\n"
+        f"Побажання: {data.get('wishes', '')}"
+    )
+
+
+async def generate_tim_banner(update: Update, context: ContextTypes.DEFAULT_TYPE, data: dict, client_comment: str = "", slide_number: int = None, story: str = ""):
+    if slide_number:
+        task = f"Створи слайд/банер №{slide_number} із 5 для Reels/Shorts як частину однієї історії."
+    else:
+        task = "Створи один рекламний банер."
+
+    prompt = f"""
+{task}
+
+Формат: вертикальний рекламний банер 1080x1920.
+Мова тексту на банері: українська.
+Бренд HireUA має виглядати професійно, але не забирати увагу від клієнта.
+Обов'язково залиш вільну зону у верхньому лівому куті для водяного знаку @UkraineHire.
+Водяний знак буде доданий автоматично після генерації.
+Не перевантажуй банер текстом. Зроби чіткий заголовок, 2-4 короткі переваги і зрозумілий заклик до дії.
+
+Дані з форми ContentBriefs:
+{content_brief_text(data)}
+
+Історія / подія для серії Reels/Shorts:
+{story}
+
+Правки або додаткові побажання клієнта:
+{client_comment}
+
+Якщо клієнт просив використати Тіма — додай дружнього AI HR-помічника Тіма у стилі HireUA.
+"""
+
+    try:
+        response = await asyncio.to_thread(
+            openai_client.images.generate,
+            model="gpt-image-1",
+            prompt=prompt,
+            size="1024x1536",
+        )
+
+        image_base64 = response.data[0].b64_json
+        image_bytes = base64.b64decode(image_base64)
+        file_path = os.path.join(tempfile.gettempdir(), f"tim_banner_{update.effective_user.id}_{uuid4().hex}.png")
+
+        with open(file_path, "wb") as f:
+            f.write(image_bytes)
+
+        return add_watermark_to_image(file_path)
+    except Exception as e:
+        print("TIM BANNER GENERATION ERROR:", e, flush=True)
+        await update.message.reply_text(
+            "⚠️ Не вдалося згенерувати банер автоматично. Я зафіксував ваші правки, спробуйте ще раз трохи пізніше."
+        )
+        return None
+
+
+async def send_tim_generated_files(update: Update, files: list, caption: str):
+    good_files = [f for f in files or [] if f and os.path.exists(f)]
+    if not good_files:
+        await update.message.reply_text(caption)
+        return
+
+    for i, path in enumerate(good_files, start=1):
+        with open(path, "rb") as photo:
+            await update.message.reply_photo(
+                photo=photo,
+                caption=caption if i == 1 else f"Слайд / банер {i}"
+            )
+
+
+async def generate_first_content_version(update: Update, context: ContextTypes.DEFAULT_TYPE, order: dict):
+    data = order.get("data", {})
+    order_type = order.get("order_type", "banner")
+
+    if order_type == "reels_series":
+        await update.message.reply_text(
+            "✅ Бриф отримано. Я вже бачу інформацію в базі ContentBriefs.\n\n"
+            "Для серії банерів під Reels / Shorts мені потрібне тільки одне уточнення:\n"
+            "яку історію, подію або сюжет ви хочете показати у відео з 5 слайдів?\n\n"
+            "Напишіть своїми словами — я уважно врахую ваші побажання.\n"
+            "На кожному банері буде водяний знак @UkraineHire."
+        )
+        order["waiting_story"] = True
+        return True
+
+    await update.message.reply_text(
+        "✅ Бриф отримано. Я вже бачу інформацію в базі ContentBriefs.\n\n"
+        "Я ознайомився з інформацією та готую перший варіант банера.\n"
+        "На банері обовʼязково буде водяний знак @UkraineHire."
+    )
+    path = await generate_tim_banner(update, context, data, client_comment=data.get("wishes", ""))
+    if path:
+        order["last_files"] = [path]
+        await send_tim_generated_files(
+            update,
+            [path],
+            "Ось перший варіант ✅\n\n"
+            "На банері додано водяний знак @UkraineHire.\n\n"
+            "Якщо потрібно щось змінити — напишіть правки, і я перероблю.\n"
+            "Коли все сподобається, напишіть:\nУЗГОДЖЕНО Клієнтом ✅"
+        )
+    return True
+
+
+async def send_final_content_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, order: dict):
+    data = order.get("data", {})
+    files = [f for f in order.get("last_files", []) if f and os.path.exists(f)]
+    final_text = order.get("publish_text") or ""
+
+    admin_caption = (
+        "✅ Замовлення УЗГОДЖЕНО з Клієнтом\n\n"
+        f"Тариф: {order.get('tariff', '')}\n"
+        f"Тип: {order.get('order_type', '')}\n\n"
+        f"{content_brief_text(data)}\n\n"
+        f"Супровідний текст:\n{final_text or 'Не вказано'}\n\n"
+        "📌 Статус: готово до публікації / виробництва"
+    )
+
+    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_caption)
+    for i, path in enumerate(files, start=1):
+        with open(path, "rb") as photo:
+            await context.bot.send_photo(
+                chat_id=ADMIN_ID,
+                photo=photo,
+                caption=f"Фінальний банер / слайд {i}" if i > 1 else "Фінальний банер / слайд 1"
+            )
+
+
+async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ""
+    order = context.user_data.get("tim_content_order")
+    if not order:
+        return False
+
+    upper_text = text.upper()
+    data = order.get("data", {})
+    order_type = order.get("order_type", "banner")
+
+    if "УЗГОДЖЕНО" in upper_text and "КЛІЄНТ" in upper_text:
+        order["status"] = "УЗГОДЖЕНО Клієнтом ✅"
+        update_content_brief_status_in_sheet(update.effective_user.id, order["status"])
+        await send_final_content_to_admin(update, context, order)
+        await update.message.reply_text(
+            "✅ Дякую! Замовлення погоджено.\n"
+            "Фінальні матеріали передано команді HireUA."
+        )
+        context.user_data.pop("tim_content_order", None)
+        return True
+
+    if order.get("waiting_story"):
+        order["waiting_story"] = False
+        order["story_received"] = True
+        order["story"] = text
+        await update.message.reply_text(
+            "Дякую ✅\n"
+            "Я підготую серію з 5 банерів для Reels / Shorts на основі вашої історії."
+        )
+        paths = []
+        for i in range(1, 6):
+            path = await generate_tim_banner(update, context, data, story=text, slide_number=i)
+            if path:
+                paths.append(path)
+        order["last_files"] = paths
+        await send_tim_generated_files(
+            update,
+            paths,
+            "Ось серія банерів для Reels / Shorts ✅\n\n"
+            "На кожному банері додано водяний знак @UkraineHire.\n\n"
+            "Перегляньте всі 5 слайдів. Якщо потрібні правки — напишіть, що змінити.\n"
+            "Коли все сподобається, напишіть:\nУЗГОДЖЕНО Клієнтом ✅"
+        )
+        return True
+
+    # Будь-яке інше повідомлення в цьому режимі — це правки клієнта або текст до публікації.
+    order.setdefault("client_edits", []).append(text)
+    order["publish_text"] = text if any(word in upper_text for word in ("ТЕКСТ", "ОПИС", "CAPTION", "ПІДПИС")) else order.get("publish_text", "")
+
+    if order_type == "reels_series":
+        await update.message.reply_text("Зрозумів правки ✅ Переробляю серію з 5 банерів. Водяний знак @UkraineHire буде на кожному банері.")
+        paths = []
+        story = order.get("story", "")
+        all_edits = "\n".join(order.get("client_edits", []))
+        for i in range(1, 6):
+            path = await generate_tim_banner(update, context, data, client_comment=all_edits, story=story, slide_number=i)
+            if path:
+                paths.append(path)
+        order["last_files"] = paths
+        await send_tim_generated_files(
+            update,
+            paths,
+            "Готово ✅ Оновлена серія з 5 банерів.\n\n"
+            "Якщо ще потрібні правки — напишіть.\n"
+            "Якщо все добре — напишіть: УЗГОДЖЕНО Клієнтом ✅"
+        )
+        return True
+
+    await update.message.reply_text("Зрозумів правки ✅ Переробляю банер з урахуванням побажань.")
+    all_edits = "\n".join(order.get("client_edits", []))
+    path = await generate_tim_banner(update, context, data, client_comment=all_edits)
+    if path:
+        order["last_files"] = [path]
+        await send_tim_generated_files(
+            update,
+            [path],
+            "Готово ✅ Оновлений банер.\n\n"
+            "Якщо ще потрібні правки — напишіть.\n"
+            "Якщо все добре — напишіть: УЗГОДЖЕНО Клієнтом ✅"
+        )
+    return True
+
+
 async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text or ""
     is_owner = update.effective_user and update.effective_user.id == OWNER_ID
@@ -1184,7 +1527,7 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "На основі серії банерів створюються Reels, Shorts, рекламні відео та серії рекламних публікацій. "
                         "На всіх матеріалах використовується бренд HireUA та водяний знак @UkraineHire. "
 
-                        "Тім може допомагати зі створенням рекламних концепцій, серій банерів, сценаріїв Reels, сценаріїв Shorts, рекламних текстів, контент-планів та ідей для просування бізнесу, вакансій і брендів. "
+                        "Тім може допомагати зі створенням рекламних концепцій, серій банерів, сценаріїв Reels, сценаріїв Shorts, рекламних текстів, контент-планів та ідей для просування бізнесу, вакансій і брендів. Якщо користувач просто пише: зроби банер, зробіть банер, потрібен банер, потрібен Reels або серія банерів — не збирай бриф у вільному чаті. Поясни, що для виробництва контенту потрібно натиснути /start і заповнити форму в розділі «📢 Реклама / Акції / Відкриття». Після заповнення форми Тім бачить дані в листі ContentBriefs і працює з клієнтом як AI-дизайнер: створює банер або серію з 5 банерів, уважно приймає правки, переробляє матеріали до повного погодження. Для серії банерів Reels/Shorts після форми став тільки одне додаткове питання: яку історію, подію або сюжет клієнт хоче показати у відео з 5 слайдів. На кожному банері обов'язково має бути водяний знак @UkraineHire. Не передавай первинну заявку адміну; адміну передаються тільки фінальні матеріали після повідомлення клієнта «УЗГОДЖЕНО Клієнтом ✅». "
                         "Тім не приймає оплату, не виставляє рахунки, не погоджує запуск реклами та не укладає договори. "
                         "Усі питання щодо оплати, рахунків, договорів, запуску реклами, пакетів Start та Business, індивідуальних умов співпраці та передачі матеріалів у виробництво Reels/Shorts передаються HR менеджеру @HireUkraine. "
                         "Після узгодження співпраці з HR менеджером Тім може супроводжувати клієнта протягом усієї рекламної кампанії та допомагати зі створенням контенту для просування. "
@@ -1217,6 +1560,9 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.to_thread(save_user_to_sheet, update, update.message.text or "")
     if await client_form_text(update, context):
+        return
+
+    if await tim_content_ai_chat(update, context):
         return
 
     if not admin_only(update):
