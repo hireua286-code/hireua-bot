@@ -80,8 +80,72 @@ SLOT_STEP_MINUTES = 5
 
 sessions = {}
 web_app = Flask(__name__)
+def detect_user_category(text: str) -> str:
+    t = (text or "").lower()
+
+    if any(w in t for w in ["вакансия", "вакансія", "ищу сотрудников", "нужны люди", "роботодавець"]):
+        return "employer"
+
+    if any(w in t for w in ["резюме", "ищу работу", "шукаю роботу", "вакансии", "вакансії"]):
+        return "job_seeker"
+
+    if any(w in t for w in ["реклама", "просування", "продвижение", "business", "start", "instagram", "facebook"]):
+        return "business"
+
+    return "chat"
 
 
+def save_user_to_sheet(update: Update, last_message: str = ""):
+    try:
+        user = update.effective_user
+        now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
+
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("Users")
+
+        user_id = str(user.id)
+        rows = sheet.get_all_values()
+
+        found_row = None
+        for i, row in enumerate(rows[1:], start=2):
+            if len(row) >= 3 and row[2] == user_id:
+                found_row = i
+                break
+
+        category = detect_user_category(last_message)
+
+        if found_row:
+            old_count = 0
+            try:
+                old_count = int(sheet.cell(found_row, 8).value or 0)
+            except Exception:
+                old_count = 0
+
+            sheet.update(f"B{found_row}:I{found_row}", [[
+                now,
+                user_id,
+                user.username or "",
+                user.first_name or "",
+                user.last_name or "",
+                category,
+                old_count + 1,
+                last_message or "",
+            ]])
+        else:
+            sheet.append_row([
+                now,
+                now,
+                user_id,
+                user.username or "",
+                user.first_name or "",
+                user.last_name or "",
+                category,
+                1,
+                last_message or "",
+            ])
+
+    except Exception as e:
+        print("GOOGLE SHEETS ERROR:", e, flush=True)
 # ---------- CLIENT KEYBOARDS / BUTTONS ----------
 # Цей блок спеціально дублює клієнтську логіку всередині bot.py,
 # щоб Start / Business гарантовано запускали бриф vacancy_promo.
@@ -492,6 +556,7 @@ def restore_pending_schedule_jobs(job_queue):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await asyncio.to_thread(save_user_to_sheet, update, "/start") 
     caption = (
         "👋 Вітаю!\n\n"
         "Я Тім AI — ваш помічник у сервісі HireUA.\n\n"
@@ -1026,6 +1091,7 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await asyncio.to_thread(save_user_to_sheet, update, update.message.text or "")
     if await client_form_text(update, context):
         return
 
