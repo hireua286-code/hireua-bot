@@ -44,6 +44,7 @@ from handlers.client import client_main_keyboard, client_buttons
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 OWNER_ID = int(os.getenv("OWNER_ID", "8734709909"))
 
@@ -1120,7 +1121,62 @@ async def go_to_materials(query, session):
         await query.edit_message_text("Оберіть пакет публікації:", reply_markup=packages_keyboard())
 
 
+async def download_telegram_photo_to_temp(context: ContextTypes.DEFAULT_TYPE, file_id: str):
+    tg_file = await context.bot.get_file(file_id)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    temp_path = temp_file.name
+    temp_file.close()
+    await tg_file.download_to_drive(temp_path)
+    return temp_path
+
+
+async def handle_content_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Зберігає фото/банер клієнта як основу для подальших правок у контент-чаті."""
+    order = context.user_data.get("tim_content_order")
+    if not order:
+        return False
+
+    if not update.message.photo:
+        return False
+
+    photo_path = await download_telegram_photo_to_temp(context, update.message.photo[-1].file_id)
+    order["last_uploaded_image"] = photo_path
+    order["stage"] = "image_uploaded_waiting_edit"
+
+    caption = (update.message.caption or "").strip()
+    if caption:
+        await update.message.reply_text("Фото отримано ✅ Вношу правки за вашим описом.")
+        base_image = order.get("last_uploaded_image")
+        path = await edit_tim_image(update, context, base_image, caption, data=order.get("data", {}), story=order.get("story", ""))
+        if path:
+            order["last_files"] = [path]
+            order["last_uploaded_image"] = path
+            order["stage"] = "generated"
+            await send_tim_generated_files(
+                update,
+                [path],
+                "Готово ✅ Я відредагував зображення.\n\nЯкщо потрібні ще правки — просто напишіть, що змінити."
+            )
+        return True
+
+    await update.message.reply_text(
+        "Фото / банер отримано ✅\n\n"
+        "Напишіть, що саме потрібно змінити:\n"
+        "• замінити фон\n"
+        "• додати текст\n"
+        "• прибрати елемент\n"
+        "• зробити преміум стиль\n"
+        "• додати Тіма або логотип"
+    )
+    return True
+
+
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Якщо клієнт у режимі Promo/Reels і надіслав фото — це основа для редагування.
+    if context.user_data.get("tim_content_order") and update.message and update.message.photo:
+        if await handle_content_photo(update, context):
+            return
+
     if not admin_only(update):
         return
 
@@ -1496,40 +1552,56 @@ def content_brief_text(data: dict) -> str:
     )
 
 
-async def generate_tim_banner(update: Update, context: ContextTypes.DEFAULT_TYPE, data: dict, client_comment: str = "", slide_number: int = None, story: str = ""):
+async def generate_tim_image_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE, data: dict, client_comment: str = "", slide_number: int = None, story: str = ""):
+    """Створює нове зображення з текстового опису."""
     if slide_number:
-        task = f"Створи слайд/банер №{slide_number} із 5 для Reels/Shorts як частину однієї історії."
+        task = f"Create slide/banner #{slide_number} of 5 for a Reels/Shorts storyboard. Keep the same visual style and story continuity across all slides."
     else:
-        task = "Створи один рекламний банер."
+        task = "Create one premium vertical advertising banner."
 
     prompt = f"""
 {task}
 
-Формат: вертикальний рекламний банер 1080x1920.
-Мова тексту на банері: українська.
-Бренд HireUA має виглядати професійно, але не забирати увагу від клієнта.
-Обов'язково залиш вільну зону у верхньому лівому куті для водяного знаку @UkraineHire.
-Водяний знак буде доданий автоматично після генерації.
-Не перевантажуй банер текстом. Зроби чіткий заголовок, 2-4 короткі переваги і зрозумілий заклик до дії.
+QUALITY REQUIREMENTS:
+Ultra high quality. Premium commercial advertising design. Modern marketing agency level.
+Professional composition, realistic lighting, sharp details, clean layout, high-end social media ad quality.
+Avoid cheap template graphics, random robots, generic AI mascots, distorted faces, messy typography, unreadable letters.
 
-Дані з форми ContentBriefs:
+FORMAT:
+Vertical 1080x1920 social media banner / Reels cover.
+Leave clean empty space for a watermark in the upper-left corner. The watermark @UkraineHire will be added automatically after generation.
+
+BRAND CONTEXT:
+HireUA is a modern Ukrainian recruitment and promotion platform. The visual should feel trustworthy, professional, energetic and premium.
+Use green/blue/white corporate mood when appropriate, but adapt to the client's task.
+Do not make HireUA dominate the client's offer.
+
+CHARACTER RULES:
+Use Tim only if it helps the task or the client clearly asked for Tim.
+Tim = young Ukrainian HR assistant, white vyshyvanka, small HireUA badge, friendly professional appearance.
+Do not replace Tim with robots or generic mascots.
+
+TEXT RULES:
+Do not create a lot of text inside the image. If text appears, it must be minimal and clean.
+Focus mainly on strong visual, composition and emotion. Text overlays can be added later.
+
+CLIENT / TASK DATA:
 {content_brief_text(data)}
 
-Історія / подія для серії Reels/Shorts:
+REELS STORY / CONTEXT:
 {story}
 
-Правки або додаткові побажання клієнта:
+CLIENT REQUEST / APPROVED BRIEF / EDITS:
 {client_comment}
-
-Якщо клієнт просив використати Тіма — додай дружнього AI HR-помічника Тіма у стилі HireUA.
 """
 
     try:
         response = await asyncio.to_thread(
             openai_client.images.generate,
-            model="gpt-image-1",
+            model=OPENAI_IMAGE_MODEL,
             prompt=prompt,
             size="1024x1536",
+            quality="high",
         )
 
         image_base64 = response.data[0].b64_json
@@ -1541,11 +1613,84 @@ async def generate_tim_banner(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         return add_watermark_to_image(file_path)
     except Exception as e:
-        print("TIM BANNER GENERATION ERROR:", e, flush=True)
+        print("TIM IMAGE GENERATION ERROR:", e, flush=True)
         await update.message.reply_text(
-            "⚠️ Не вдалося згенерувати банер автоматично. Я зафіксував ваші правки, спробуйте ще раз трохи пізніше."
+            "⚠️ Не вдалося згенерувати зображення автоматично. Спробуйте ще раз трохи пізніше."
         )
         return None
+
+
+async def edit_tim_image(update: Update, context: ContextTypes.DEFAULT_TYPE, base_image_path: str, client_comment: str = "", data: dict = None, slide_number: int = None, story: str = ""):
+    """Редагує завантажене або останнє згенероване зображення за текстовими правками клієнта."""
+    data = data or {}
+    if not base_image_path or not os.path.exists(base_image_path):
+        return await generate_tim_image_from_text(update, context, data, client_comment=client_comment, slide_number=slide_number, story=story)
+
+    prompt = f"""
+Edit the provided image according to the client's request.
+
+IMPORTANT:
+Preserve the main composition and identity of the original image unless the client asks to change it.
+Do not create a completely unrelated new image.
+Keep professional premium advertising quality.
+Keep vertical social media banner style.
+Improve design, lighting, colors and readability when useful.
+Avoid random robots, distorted faces, unreadable letters and messy text.
+If text must be changed, make it clean and minimal.
+Leave space in the upper-left corner for @UkraineHire watermark.
+
+CLIENT / TASK DATA:
+{content_brief_text(data)}
+
+STORY / CONTEXT:
+{story}
+
+CLIENT EDIT REQUEST:
+{client_comment}
+"""
+
+    def _edit_single_image():
+        # Different SDK versions accept either image=file or image=[file]. Try both safely.
+        with open(base_image_path, "rb") as img:
+            try:
+                return openai_client.images.edit(
+                    model=OPENAI_IMAGE_MODEL,
+                    image=img,
+                    prompt=prompt,
+                    size="1024x1536",
+                    quality="high",
+                )
+            except TypeError:
+                img.seek(0)
+                return openai_client.images.edit(
+                    model=OPENAI_IMAGE_MODEL,
+                    image=[img],
+                    prompt=prompt,
+                    size="1024x1536",
+                    quality="high",
+                )
+
+    try:
+        response = await asyncio.to_thread(_edit_single_image)
+        image_base64 = response.data[0].b64_json
+        image_bytes = base64.b64decode(image_base64)
+        file_path = os.path.join(tempfile.gettempdir(), f"tim_edit_{update.effective_user.id}_{uuid4().hex}.png")
+
+        with open(file_path, "wb") as f:
+            f.write(image_bytes)
+
+        return add_watermark_to_image(file_path)
+    except Exception as e:
+        print("TIM IMAGE EDIT ERROR:", e, flush=True)
+        await update.message.reply_text(
+            "⚠️ Не вдалося відредагувати зображення. Я спробую створити новий варіант за вашими правками."
+        )
+        return await generate_tim_image_from_text(update, context, data, client_comment=client_comment, slide_number=slide_number, story=story)
+
+
+# Backward-compatible name used by the rest of the bot.
+async def generate_tim_banner(update: Update, context: ContextTypes.DEFAULT_TYPE, data: dict, client_comment: str = "", slide_number: int = None, story: str = ""):
+    return await generate_tim_image_from_text(update, context, data, client_comment=client_comment, slide_number=slide_number, story=story)
 
 
 async def send_tim_generated_files(update: Update, files: list, caption: str):
@@ -1752,6 +1897,7 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
             path = await generate_tim_banner(update, context, data, client_comment=final_prompt)
             if path:
                 order["last_files"] = [path]
+                order["last_uploaded_image"] = path
                 order["stage"] = "generated"
                 await send_tim_generated_files(
                     update,
@@ -1836,14 +1982,26 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text("Зрозумів правки ✅ Переробляю банер з урахуванням побажань.")
     all_edits = "\n".join(order.get("client_edits", []))
-    path = await generate_tim_banner(update, context, data, client_comment=all_edits)
+
+    # Якщо є завантажене або останнє згенероване зображення — редагуємо саме його.
+    base_image = order.get("last_uploaded_image")
+    if not base_image and order.get("last_files"):
+        base_image = order.get("last_files", [None])[-1]
+
+    if base_image:
+        path = await edit_tim_image(update, context, base_image, all_edits, data=data)
+    else:
+        path = await generate_tim_banner(update, context, data, client_comment=all_edits)
+
     if path:
         order["last_files"] = [path]
+        order["last_uploaded_image"] = path
+        order["stage"] = "generated"
         await send_tim_generated_files(
             update,
             [path],
             "Готово ✅ Оновлений банер.\n\n"
-            "Якщо ще потрібні правки — напишіть.\n"
+            "Якщо ще потрібні правки — просто напишіть, що змінити.\n"
             "Якщо все добре — напишіть: УЗГОДЖЕНО Клієнтом ✅"
         )
     return True
