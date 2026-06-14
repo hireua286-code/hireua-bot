@@ -290,10 +290,10 @@ def vacancy_tariffs_keyboard():
 
 def promo_order_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🖼 Банер — 500 грн", callback_data="content_banner")],
-        [InlineKeyboardButton("🎬 Серія банерів для Reels / Shorts — 800 грн", callback_data="content_reels")],
-        [InlineKeyboardButton("🚀 Start — просування 7 днів", callback_data="content_start")],
-        [InlineKeyboardButton("💼 Business — активне просування 7 днів", callback_data="content_business")],
+        [InlineKeyboardButton("🚀 Start", callback_data="content_start")],
+        [InlineKeyboardButton("💼 Business", callback_data="content_business")],
+        [InlineKeyboardButton("🖼 Банер", callback_data="content_banner")],
+        [InlineKeyboardButton("🎬 Reels / Shorts", callback_data="content_reels")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="client_back")],
     ])
 
