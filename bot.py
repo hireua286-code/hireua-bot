@@ -24,6 +24,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.error import TimedOut, NetworkError, RetryAfter
 
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -92,6 +93,93 @@ SLOT_STEP_MINUTES = 5
 
 sessions = {}
 web_app = Flask(__name__)
+
+# Stage 4: захист від зависань Telegram/OpenAI.
+# Якщо Telegram або генерація картинки довго не відповідають, бот не мовчить безкінечно.
+IMAGE_GENERATION_TIMEOUT = int(os.getenv("IMAGE_GENERATION_TIMEOUT", "180"))
+
+
+async def safe_reply_text(update: Update, text: str, **kwargs):
+    try:
+        return await update.message.reply_text(text, **kwargs)
+    except RetryAfter as e:
+        await asyncio.sleep(int(getattr(e, "retry_after", 5)) + 1)
+        try:
+            return await update.message.reply_text(text, **kwargs)
+        except Exception as err:
+            print("TELEGRAM SAFE REPLY TEXT ERROR AFTER RETRY:", err, flush=True)
+            return None
+    except (TimedOut, NetworkError) as e:
+        print("TELEGRAM SAFE REPLY TEXT ERROR:", e, flush=True)
+        return None
+    except Exception as e:
+        print("TELEGRAM SAFE REPLY TEXT UNKNOWN ERROR:", e, flush=True)
+        return None
+
+
+async def safe_send_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, **kwargs):
+    try:
+        return await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+    except RetryAfter as e:
+        await asyncio.sleep(int(getattr(e, "retry_after", 5)) + 1)
+        try:
+            return await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        except Exception as err:
+            print("TELEGRAM SAFE SEND MESSAGE ERROR AFTER RETRY:", err, flush=True)
+            return None
+    except (TimedOut, NetworkError) as e:
+        print("TELEGRAM SAFE SEND MESSAGE ERROR:", e, flush=True)
+        return None
+    except Exception as e:
+        print("TELEGRAM SAFE SEND MESSAGE UNKNOWN ERROR:", e, flush=True)
+        return None
+
+
+async def safe_reply_photo(update: Update, photo, caption: str = None, **kwargs):
+    try:
+        return await update.message.reply_photo(photo=photo, caption=caption, **kwargs)
+    except RetryAfter as e:
+        await asyncio.sleep(int(getattr(e, "retry_after", 5)) + 1)
+        try:
+            return await update.message.reply_photo(photo=photo, caption=caption, **kwargs)
+        except Exception as err:
+            print("TELEGRAM SAFE REPLY PHOTO ERROR AFTER RETRY:", err, flush=True)
+            return None
+    except (TimedOut, NetworkError) as e:
+        print("TELEGRAM SAFE REPLY PHOTO ERROR:", e, flush=True)
+        try:
+            return await update.message.reply_document(document=photo, caption=caption or "Зображення готове ✅")
+        except Exception as err:
+            print("TELEGRAM SAFE REPLY DOCUMENT FALLBACK ERROR:", err, flush=True)
+            await safe_reply_text(update, "⚠️ Зображення готове, але Telegram не зміг його відправити. Спробуйте ще раз через хвилину.")
+            return None
+    except Exception as e:
+        print("TELEGRAM SAFE REPLY PHOTO UNKNOWN ERROR:", e, flush=True)
+        await safe_reply_text(update, "⚠️ Telegram не зміг відправити зображення. Спробуйте ще раз через хвилину.")
+        return None
+
+
+async def safe_send_photo(context: ContextTypes.DEFAULT_TYPE, chat_id: int, photo, caption: str = None, **kwargs):
+    try:
+        return await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, **kwargs)
+    except RetryAfter as e:
+        await asyncio.sleep(int(getattr(e, "retry_after", 5)) + 1)
+        try:
+            return await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, **kwargs)
+        except Exception as err:
+            print("TELEGRAM SAFE SEND PHOTO ERROR AFTER RETRY:", err, flush=True)
+            return None
+    except (TimedOut, NetworkError) as e:
+        print("TELEGRAM SAFE SEND PHOTO ERROR:", e, flush=True)
+        try:
+            return await context.bot.send_document(chat_id=chat_id, document=photo, caption=caption or "Зображення готове ✅")
+        except Exception as err:
+            print("TELEGRAM SAFE SEND DOCUMENT FALLBACK ERROR:", err, flush=True)
+            return None
+    except Exception as e:
+        print("TELEGRAM SAFE SEND PHOTO UNKNOWN ERROR:", e, flush=True)
+        return None
+
 def detect_user_category(text: str) -> str:
     t = (text or "").lower()
 
@@ -1596,12 +1684,15 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
 """
 
     try:
-        response = await asyncio.to_thread(
-            openai_client.images.generate,
-            model=OPENAI_IMAGE_MODEL,
-            prompt=prompt,
-            size="1024x1536",
-            quality="high",
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                openai_client.images.generate,
+                model=OPENAI_IMAGE_MODEL,
+                prompt=prompt,
+                size="1024x1536",
+                quality="high",
+            ),
+            timeout=IMAGE_GENERATION_TIMEOUT,
         )
 
         image_base64 = response.data[0].b64_json
@@ -1614,7 +1705,8 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
         return add_watermark_to_image(file_path)
     except Exception as e:
         print("TIM IMAGE GENERATION ERROR:", e, flush=True)
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             "⚠️ Не вдалося згенерувати зображення автоматично. Спробуйте ще раз трохи пізніше."
         )
         return None
@@ -1671,7 +1763,10 @@ CLIENT EDIT REQUEST:
                 )
 
     try:
-        response = await asyncio.to_thread(_edit_single_image)
+        response = await asyncio.wait_for(
+            asyncio.to_thread(_edit_single_image),
+            timeout=IMAGE_GENERATION_TIMEOUT,
+        )
         image_base64 = response.data[0].b64_json
         image_bytes = base64.b64decode(image_base64)
         file_path = os.path.join(tempfile.gettempdir(), f"tim_edit_{update.effective_user.id}_{uuid4().hex}.png")
@@ -1682,7 +1777,8 @@ CLIENT EDIT REQUEST:
         return add_watermark_to_image(file_path)
     except Exception as e:
         print("TIM IMAGE EDIT ERROR:", e, flush=True)
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             "⚠️ Не вдалося відредагувати зображення. Я спробую створити новий варіант за вашими правками."
         )
         return await generate_tim_image_from_text(update, context, data, client_comment=client_comment, slide_number=slide_number, story=story)
@@ -1841,14 +1937,24 @@ def wants_previous_image(text: str) -> bool:
 async def send_tim_generated_files(update: Update, files: list, caption: str):
     good_files = [f for f in files or [] if f and os.path.exists(f)]
     if not good_files:
-        await update.message.reply_text(caption)
+        await safe_reply_text(update, caption)
         return
 
     for i, path in enumerate(good_files, start=1):
-        with open(path, "rb") as photo:
-            await update.message.reply_photo(
-                photo=photo,
-                caption=caption if i == 1 else f"Слайд / банер {i}"
+        file_caption = caption if i == 1 else f"Слайд / банер {i}"
+        try:
+            with open(path, "rb") as photo:
+                sent = await safe_reply_photo(update, photo=photo, caption=file_caption)
+
+            if sent is None and os.path.exists(path):
+                # Якщо Telegram не прийняв файл-потік, пробуємо ще раз через шлях до файлу.
+                with open(path, "rb") as document:
+                    await safe_reply_photo(update, photo=document, caption=file_caption)
+        except Exception as e:
+            print("SEND TIM GENERATED FILE ERROR:", e, flush=True)
+            await safe_reply_text(
+                update,
+                "⚠️ Зображення готове, але Telegram не зміг його відправити. Спробуйте ще раз через хвилину."
             )
 
 
@@ -1978,10 +2084,11 @@ async def send_final_content_to_admin(update: Update, context: ContextTypes.DEFA
         "📌 Статус: готово до публікації / виробництва"
     )
 
-    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_caption)
+    await safe_send_message(context, chat_id=ADMIN_ID, text=admin_caption)
     for i, path in enumerate(files, start=1):
         with open(path, "rb") as photo:
-            await context.bot.send_photo(
+            await safe_send_photo(
+                context,
                 chat_id=ADMIN_ID,
                 photo=photo,
                 caption=f"Фінальний банер / слайд {i}" if i > 1 else "Фінальний банер / слайд 1"
@@ -2847,7 +2954,15 @@ async def run_bot():
 
     print("STARTING BOT", flush=True)
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .connect_timeout(60)
+        .read_timeout(180)
+        .write_timeout(180)
+        .pool_timeout(180)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
