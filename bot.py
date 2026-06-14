@@ -335,7 +335,7 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         await query.message.reply_text(
             "🚀 Пакет Start\n\n"
-            "Зараз заповнимо вакансію і бриф для банера / Reels / Shorts.\n\n"
+            "Зараз заповнимо заявку на пакет Start.\n\n"
             "🏢 Вкажіть назву компанії:"
         )
         return
@@ -349,7 +349,7 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         await query.message.reply_text(
             "💼 Пакет Business\n\n"
-            "Зараз заповнимо вакансію і розширений бриф для банера / Reels / Shorts.\n\n"
+            "Зараз заповнимо заявку на пакет Business.\n\n"
             "🏢 Вкажіть назву компанії:"
         )
         return
@@ -503,7 +503,7 @@ async def start_users_start_form(update: Update, context: ContextTypes.DEFAULT_T
     }
     await update.message.reply_text(
         "🚀 Пакет Start\n\n"
-        "Зараз заповнимо вакансію і бриф для банера / Reels / Shorts.\n\n"
+        "Зараз заповнимо заявку на пакет Start.\n\n"
         "🏢 Вкажіть назву компанії:"
     )
 
@@ -517,7 +517,7 @@ async def start_users_business_form(update: Update, context: ContextTypes.DEFAUL
     }
     await update.message.reply_text(
         "💼 Пакет Business\n\n"
-        "Зараз заповнимо вакансію і розширений бриф для банера / Reels / Shorts.\n\n"
+        "Зараз заповнимо заявку на пакет Business.\n\n"
         "🏢 Вкажіть назву компанії:"
     )
 
@@ -1206,14 +1206,6 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ("duties", "duties", "benefits", "🎁 Що пропонує компанія?\nНаприклад: харчування, розвозка, житло, бонуси, навчання тощо."),
             ("benefits", "benefits", "contacts", "📞 Вкажіть контакти:"),
             ("contacts", "contacts", "days", "📅 На скільки днів розміщення?\n\n1 / 3 / 7 / 14 / 30"),
-            ("days", "days", "promo_about", "📋 Коротко про компанію для реклами:\nНаприклад: чим займається компанія, чому їй можна довіряти."),
-            ("promo_about", "promo_about", "promo_audience", "🎯 Цільова аудиторія? Кого хочемо залучити?"),
-            ("promo_audience", "promo_audience", "promo_tim", "🤖 Використовувати Тіма у банерах / відео? Так / Ні / На розсуд дизайнера"),
-            ("promo_tim", "promo_tim", "promo_style", "🎨 Який стиль реклами? Діловий / сучасний / молодіжний / преміум / смішний"),
-            ("promo_style", "promo_style", "promo_music", "🎵 Музика або стиль музики для Reels / Shorts? Тренди / Rock / Pop / без різниці / свій варіант"),
-            ("promo_music", "promo_music", "promo_urgent", "🔥 Терміново? Так / Ні"),
-            ("promo_urgent", "promo_urgent", "promo_materials", "🖼 Є логотип, фото або відео матеріали? Так / Ні"),
-            ("promo_materials", "promo_materials", "promo_wishes", "✏️ Побажання до банера / Reels / Shorts:"),
         ]
 
         for current_step, field_name, next_step, question in vacancy_steps:
@@ -1224,8 +1216,8 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(question)
                 return True
 
-        if step == "promo_wishes":
-            data["promo_wishes"] = text
+        if step == "days":
+            data["days"] = text
             form["data"] = data
 
             admin_text = (
@@ -1243,24 +1235,16 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📝 Обов'язки: {data.get('duties')}\n"
                 f"🎁 Компанія пропонує: {data.get('benefits')}\n"
                 f"📞 Контакти: {data.get('contacts')}\n"
-                f"📅 Днів розміщення: {data.get('days')}\n\n"
-                "🎨 БРИФ ДЛЯ КОНТЕНТУ\n"
-                f"📋 Про компанію: {data.get('promo_about')}\n"
-                f"🎯 Цільова аудиторія: {data.get('promo_audience')}\n"
-                f"🤖 Тім у контенті: {data.get('promo_tim')}\n"
-                f"🎨 Стиль: {data.get('promo_style')}\n"
-                f"🎵 Музика: {data.get('promo_music')}\n"
-                f"🔥 Терміново: {data.get('promo_urgent')}\n"
-                f"🖼 Матеріали: {data.get('promo_materials')}\n"
-                f"✏️ Побажання: {data.get('promo_wishes')}"
+                f"📅 Днів розміщення: {data.get('days')}"
             )
 
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
             append_vacancy_to_sheet(data, form.get("tariff", ""))
 
             await update.message.reply_text(
-                "✅ Заявка Start / Business прийнята.\n"
-                "Ми перевіримо інформацію та зв'яжемось з вами."
+                "✅ Заявка прийнята.\n\n"
+                "Для активації пакета зв'яжіться з адміністратором:\n\n"
+                "@HireUkraine"
             )
 
             context.user_data.pop("client_form", None)
