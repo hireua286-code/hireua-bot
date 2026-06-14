@@ -414,6 +414,144 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("Оберіть потрібний розділ нижче 👇", reply_markup=client_main_keyboard())
 
 
+def tim_service_keyboard(intent: str | None = None):
+    """Кнопки, которые Тім показывает после GPT-ответа, когда клиент готов оформить заявку."""
+    if intent == "vacancy":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("/Free — безкоштовна вакансія", callback_data="vacancy_free")],
+            [InlineKeyboardButton("/UsersStart — пакет Start", callback_data="vacancy_start")],
+            [InlineKeyboardButton("/UsersBusiness — пакет Business", callback_data="vacancy_business")],
+        ])
+
+    if intent == "resume":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("/resume — безкоштовне резюме", callback_data="client_resume")],
+        ])
+
+    if intent == "promo":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("/Promo — банер", callback_data="content_banner")],
+            [InlineKeyboardButton("/Reels — Reels / Shorts", callback_data="content_reels")],
+        ])
+
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("/Free — безкоштовна вакансія", callback_data="vacancy_free")],
+        [InlineKeyboardButton("/resume — безкоштовне резюме", callback_data="client_resume")],
+        [InlineKeyboardButton("/UsersStart — пакет Start", callback_data="vacancy_start")],
+        [InlineKeyboardButton("/UsersBusiness — пакет Business", callback_data="vacancy_business")],
+        [InlineKeyboardButton("/Promo — банер", callback_data="content_banner")],
+        [InlineKeyboardButton("/Reels — Reels / Shorts", callback_data="content_reels")],
+    ])
+
+
+def detect_tim_service_intent(text: str):
+    """Простое и стабильное определение, какие кнопки показать после ответа Тіма."""
+    t = (text or "").lower()
+
+    promo_words = [
+        "банер", "баннер", "banner", "reels", "рилс", "shorts", "шортс",
+        "реклама", "рекламу", "реклам", "акция", "акція", "акции", "акції",
+        "кампания", "кампанія", "продвиж", "просуван", "контент"
+    ]
+    resume_words = [
+        "резюме", "cv", "сі ві", "сиви", "кандидат", "шукаю роботу",
+        "ищу работу", "знайти роботу", "найти работу"
+    ]
+    vacancy_words = [
+        "вакансия", "вакансія", "вакансии", "вакансії", "работник",
+        "працівник", "сотрудник", "співробітник", "персонал", "найти людей",
+        "знайти людей", "ищу людей", "шукаю людей", "разместить вакансию",
+        "розмістити вакансію", "пакет старт", "пакет start", "start",
+        "business", "бизнес", "бізнес", "usersstart", "usersbusiness"
+    ]
+
+    if any(w in t for w in promo_words):
+        return "promo"
+    if any(w in t for w in resume_words):
+        return "resume"
+    if any(w in t for w in vacancy_words):
+        return "vacancy"
+    return None
+
+
+async def start_free_vacancy_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["client_form"] = {
+        "type": "vacancy",
+        "tariff": "Безкоштовна текстова вакансія",
+        "step": "company",
+        "data": {},
+    }
+    await update.message.reply_text("🆓 Безкоштовна вакансія\n\n🏢 Вкажіть назву компанії:")
+
+
+async def start_resume_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["client_form"] = {
+        "type": "resume",
+        "tariff": "Резюме",
+        "step": "resume_name",
+        "data": {},
+    }
+    await update.message.reply_text("👤 Безкоштовне резюме\n\nВкажіть імʼя:")
+
+
+async def start_users_start_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["client_form"] = {
+        "type": "vacancy_promo",
+        "tariff": "Start",
+        "step": "company",
+        "data": {},
+    }
+    await update.message.reply_text(
+        "🚀 Пакет Start\n\n"
+        "Зараз заповнимо вакансію і бриф для банера / Reels / Shorts.\n\n"
+        "🏢 Вкажіть назву компанії:"
+    )
+
+
+async def start_users_business_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["client_form"] = {
+        "type": "vacancy_promo",
+        "tariff": "Business",
+        "step": "company",
+        "data": {},
+    }
+    await update.message.reply_text(
+        "💼 Пакет Business\n\n"
+        "Зараз заповнимо вакансію і розширений бриф для банера / Reels / Shorts.\n\n"
+        "🏢 Вкажіть назву компанії:"
+    )
+
+
+async def start_promo_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["client_form"] = {
+        "type": "content_order",
+        "tariff": "Банер",
+        "order_type": "banner",
+        "step": "content_company",
+        "data": {},
+    }
+    await update.message.reply_text(
+        "🖼 Банер\n\n"
+        "Зараз заповнимо короткий бриф для рекламного банера.\n\n"
+        "🏢 Вкажіть назву компанії / бренду:"
+    )
+
+
+async def start_reels_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["client_form"] = {
+        "type": "content_order",
+        "tariff": "Reels / Shorts",
+        "order_type": "reels_series",
+        "step": "content_company",
+        "data": {},
+    }
+    await update.message.reply_text(
+        "🎬 Reels / Shorts\n\n"
+        "Зараз заповнимо короткий бриф для Reels / Shorts.\n\n"
+        "🏢 Вкажіть назву компанії / бренду:"
+    )
+
+
 @web_app.route("/")
 def home():
     return "HireUA bot is running"
@@ -1529,9 +1667,12 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "На основі серії банерів створюються Reels, Shorts, рекламні відео та серії рекламних публікацій. "
                         "На всіх матеріалах використовується бренд HireUA та водяний знак @UkraineHire. "
 
-                        "Тім може допомагати зі створенням рекламних концепцій, серій банерів, сценаріїв Reels, сценаріїв Shorts, рекламних текстів, контент-планів та ідей для просування бізнесу, вакансій і брендів. Якщо користувач просто пише: зроби банер, зробіть банер, потрібен банер, потрібен Reels або серія банерів — не збирай бриф у вільному чаті. Поясни, що для виробництва контенту потрібно натиснути /start і заповнити форму в розділі «📢 Реклама / Акції / Відкриття». Після заповнення форми Тім бачить дані в листі ContentBriefs і працює з клієнтом як AI-дизайнер: створює банер або серію з 5 банерів, уважно приймає правки, переробляє матеріали до повного погодження. Для серії банерів Reels/Shorts після форми став тільки одне додаткове питання: яку історію, подію або сюжет клієнт хоче показати у відео з 5 слайдів. На кожному банері обов'язково має бути водяний знак @UkraineHire. Не передавай первинну заявку адміну; адміну передаються тільки фінальні матеріали після повідомлення клієнта «УЗГОДЖЕНО Клієнтом ✅». "
+                        "Тім може допомагати зі створенням рекламних концепцій, серій банерів, сценаріїв Reels, сценаріїв Shorts, рекламних текстів, контент-планів та ідей для просування бізнесу, вакансій і брендів. "
+                        "Якщо користувач хоче оформити заявку, розмістити вакансію, додати резюме, замовити банер, Reels, Shorts або пакет Start / Business — не відправляй його в /start і не відправляй до HR менеджера. "
+                        "Спочатку коротко поясни варіант, який підходить користувачу, а потім напиши: «Для оформлення заявки натисніть потрібну кнопку нижче 👇». "
+                        "Не вигадуй назви кнопок. Доступні тільки такі команди: /Free — безкоштовна вакансія, /resume — безкоштовне резюме, /UsersStart — пакет Start, /UsersBusiness — пакет Business, /Promo — банер, /Reels — Reels / Shorts. "
+                        "Анкета запускається тільки після натискання кнопки або команди. У вільному GPT-чаті не збирай повну анкету. "
                         "Тім не приймає оплату, не виставляє рахунки, не погоджує запуск реклами та не укладає договори. "
-                        "Усі питання щодо оплати, рахунків, договорів, запуску реклами, пакетів Start та Business, індивідуальних умов співпраці та передачі матеріалів у виробництво Reels/Shorts передаються HR менеджеру @HireUkraine. "
                         "Після узгодження співпраці з HR менеджером Тім може супроводжувати клієнта протягом усієї рекламної кампанії та допомагати зі створенням контенту для просування. "
 
                         "Головна задача Тіма — допомогти клієнту отримати максимальну користь від просування через мережу HireUA. "
@@ -1540,7 +1681,7 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "Не вигадуй вакансії, кандидатів, клієнтів або результати. "
                         "Не обіцяй гарантовані продажі, гарантовану кількість переглядів або гарантовану кількість заявок. "
                         "Говори про можливості, охоплення, впізнаваність бренду та потенційний результат від регулярного просування. "
-                        "Якщо користувач готовий почати співпрацю — запропонуй звернутися до HR менеджера @HireUkraine або скористатися меню сервісу HireUA."
+                        "Якщо користувач готовий почати співпрацю — скажи йому натиснути потрібну кнопку нижче: /Free, /resume, /UsersStart, /UsersBusiness, /Promo або /Reels."
                     )
                 },
                 {
@@ -1550,7 +1691,9 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
 
-        await update.message.reply_text(response.output_text)
+        intent = detect_tim_service_intent(user_text)
+        reply_markup = tim_service_keyboard(intent) if intent else None
+        await update.message.reply_text(response.output_text, reply_markup=reply_markup)
 
     except Exception as e:
         print("TIM AI ERROR:", e, flush=True)
@@ -2073,6 +2216,14 @@ async def run_bot():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("cancel", cancel))
+
+    # Команды клиентских анкет. Тім показывает эти же команды кнопками после GPT-ответа.
+    app.add_handler(CommandHandler("Free", start_free_vacancy_form))
+    app.add_handler(CommandHandler("resume", start_resume_form))
+    app.add_handler(CommandHandler("UsersStart", start_users_start_form))
+    app.add_handler(CommandHandler("UsersBusiness", start_users_business_form))
+    app.add_handler(CommandHandler("Promo", start_promo_form))
+    app.add_handler(CommandHandler("Reels", start_reels_form))
     app.add_handler(CallbackQueryHandler(client_resume_start, pattern="^client_resume$"))
     app.add_handler(CallbackQueryHandler(client_buttons, pattern="^(client_|vacancy_|content_)"))
     app.add_handler(CallbackQueryHandler(buttons))
