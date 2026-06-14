@@ -186,6 +186,29 @@ def append_vacancy_to_sheet(data: dict, tariff: str = ""):
         print("GOOGLE VACANCY ERROR:", e, flush=True)
 
 
+def append_client_to_sheet(data: dict, tariff: str = "", user=None):
+    try:
+        now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("Clients")
+
+        telegram_id = user.id if user else ""
+        username = f"@{user.username}" if user and user.username else ""
+        name = " ".join([x for x in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if x]).strip()
+
+        sheet.append_row([
+            telegram_id,
+            username,
+            name,
+            data.get("contacts", ""),
+            tariff,
+            "pending",
+            now,
+        ])
+    except Exception as e:
+        print("GOOGLE CLIENTS ERROR:", e, flush=True)
+
+
 def append_resume_to_sheet(data: dict):
     try:
         now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
@@ -1192,7 +1215,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await generate_first_content_version(update, context, order)
             return True
 
-    # ---------- START / BUSINESS: ВАКАНСІЯ + ПРОСУВАННЯ ----------
+    # ---------- START / BUSINESS: ЗАЯВКА НА ПАКЕТ ----------
     if form_type == "vacancy_promo":
         vacancy_steps = [
             ("company", "company", "position", "💼 Вкажіть посаду:"),
@@ -1223,7 +1246,9 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             admin_text = (
                 "📥 Нова заявка Start / Business\n\n"
                 f"Тариф: {form.get('tariff')}\n\n"
-                "👨‍💼 ВАКАНСІЯ\n"
+                f"👤 Клієнт: @{update.effective_user.username or ''}\n"
+                f"Telegram ID: {update.effective_user.id}\n\n"
+                "👨‍💼 ВАКАНСІЯ / ПАКЕТ\n"
                 f"🏢 Компанія: {data.get('company')}\n"
                 f"💼 Посада: {data.get('position')}\n"
                 f"📍 Місто: {data.get('city')}\n"
@@ -1240,6 +1265,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
             append_vacancy_to_sheet(data, form.get("tariff", ""))
+            append_client_to_sheet(data, form.get("tariff", ""), update.effective_user)
 
             await update.message.reply_text(
                 "✅ Заявка прийнята.\n\n"
