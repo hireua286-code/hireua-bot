@@ -307,8 +307,8 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "data": {},
         }
         await query.message.reply_text(
-            "📢 Просування бізнесу / бренду"
-            "Зараз заповнимо короткий бриф для рекламної кампанії HireUA."
+            "📢 Просування бізнесу / бренду\n\n"
+            "Зараз заповнимо короткий бриф для рекламної кампанії HireUA.\n\n"
             "🏢 Вкажіть назву компанії / бренду:"
         )
         return
@@ -332,7 +332,7 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Разом: 168 публікацій за 7 днів\n\n"
             "У пакетах Start та Business вже входять банери, Reels, Shorts, відео з Тімом та супровід зі створення контенту.\n\n"
             "Для запуску напишіть HR менеджеру: @HireUkraine"
-       )
+        )
         return
 
     await query.message.reply_text("Оберіть потрібний розділ нижче 👇", reply_markup=client_main_keyboard())
@@ -1196,6 +1196,7 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "Не обіцяй гарантовані продажі, гарантовану кількість переглядів або гарантовану кількість заявок. "
                         "Говори про можливості, охоплення, впізнаваність бренду та потенційний результат від регулярного просування. "
                         "Якщо користувач готовий почати співпрацю — запропонуй звернутися до HR менеджера @HireUkraine або скористатися меню сервісу HireUA."
+                    )
                 },
                 {
                     "role": "user",
