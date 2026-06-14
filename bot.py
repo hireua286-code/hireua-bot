@@ -264,7 +264,7 @@ async def deny_unpaid_content_access(message):
 
 
 async def start_paid_content_chat(update: Update, context: ContextTypes.DEFAULT_TYPE, order_type: str = "banner"):
-    """Запускає вільний GPT-діалог для створення банера або Reels без повторного брифа."""
+    """Запускає AI-діалог для створення банера або Reels без повторного брифа."""
     message = update.message if update.message else update.callback_query.message
     user = update.effective_user
 
@@ -272,9 +272,7 @@ async def start_paid_content_chat(update: Update, context: ContextTypes.DEFAULT_
         await deny_unpaid_content_access(message)
         return
 
-    # ВАЖНО: режим создания контента должен работать как GPT-чат.
-    # Если у пользователя раньше висела анкета вакансии/пакета, она не должна
-    # перехватывать следующие сообщения после /Promo или /Reels.
+    # Режим створення контенту має пріоритет над анкетами.
     context.user_data.pop("client_form", None)
 
     if order_type == "reels_series":
@@ -283,15 +281,18 @@ async def start_paid_content_chat(update: Update, context: ContextTypes.DEFAULT_
             "order_type": "reels_series",
             "data": {},
             "status": "В РОБОТІ",
+            "stage": "awaiting_idea",
             "last_files": [],
             "client_edits": [],
             "publish_text": "",
-            "waiting_story": True,
         }
         await message.reply_text(
-            "🎬 Опишіть ідею Reels / Shorts одним повідомленням.\n\n"
-            "Наприклад: відкриття магазину, вакансія, акція, знижка, місто, стиль, що має побачити клієнт.\n\n"
-            "Після цього я підготую серію з 5 банерів 1080×1920."
+            "🎬 Напишіть задачу для Reels / Shorts в 1–2 реченнях.\n\n"
+            "Наприклад:\n"
+            "• Рилс для вакансії касира в Києві\n"
+            "• Реклама відкриття магазину\n"
+            "• Рилс для акції або знижки\n\n"
+            "Довгий промпт не потрібен. Я сам запропоную декілька ідей і сценарій."
         )
         return
 
@@ -300,14 +301,18 @@ async def start_paid_content_chat(update: Update, context: ContextTypes.DEFAULT_
         "order_type": "banner",
         "data": {},
         "status": "В РОБОТІ",
+        "stage": "awaiting_idea",
         "last_files": [],
         "client_edits": [],
         "publish_text": "",
     }
     await message.reply_text(
-        "🖼 Опишіть, який банер потрібно створити.\n\n"
-        "Наприклад: банер для вакансії касира в Києві, зарплата, графік, контакти, стиль, кольори, акція або відкриття.\n\n"
-        "Після цього я підготую перший варіант."
+        "🖼 Напишіть задачу для банера в 1–2 реченнях.\n\n"
+        "Наприклад:\n"
+        "• Банер для вакансії касира в Києві\n"
+        "• Реклама автомийки\n"
+        "• Банер відкриття магазину\n\n"
+        "Довгий промпт не потрібен. Я сам запропоную кілька концепцій."
     )
 
 
@@ -1500,61 +1505,31 @@ async def generate_tim_banner(update: Update, context: ContextTypes.DEFAULT_TYPE
     prompt = f"""
 {task}
 
-Create a premium, high-end commercial social media visual for HireUA.
+Формат: вертикальний рекламний банер 1080x1920.
+Мова тексту на банері: українська.
+Бренд HireUA має виглядати професійно, але не забирати увагу від клієнта.
+Обов'язково залиш вільну зону у верхньому лівому куті для водяного знаку @UkraineHire.
+Водяний знак буде доданий автоматично після генерації.
+Не перевантажуй банер текстом. Зроби чіткий заголовок, 2-4 короткі переваги і зрозумілий заклик до дії.
 
-FORMAT AND QUALITY:
-- Vertical portrait advertising image, 1024x1536 / 1080x1920 style.
-- Ultra high quality, premium marketing agency level.
-- Sharp details, clean composition, professional lighting, modern color grading.
-- Must look like a real paid advertising creative for Meta / Instagram / LinkedIn, not like a cheap template.
-- Modern Ukrainian recruitment and business promotion platform style.
-
-IMPORTANT TEXT RULES:
-- Do NOT generate large blocks of text inside the image.
-- Do NOT create unreadable letters, fake words, distorted typography or random signs.
-- If text is necessary, use only very short clean visual hints, but prefer leaving clear empty areas for later text overlay.
-- Leave free space in the top-left corner for the automatic watermark @UkraineHire.
-
-BRAND STYLE:
-- Brand: HireUA.
-- Mood: trustworthy, modern, professional, helpful, optimistic.
-- Visual direction: premium HR-tech, recruitment agency, business growth, Ukrainian market.
-- Use clean corporate green / blue / white accents where appropriate.
-- Do not use generic robots, plastic-looking mascots, childish cartoon characters or low-quality clipart.
-
-TIM CHARACTER RULES:
-- Use Tim only if the client asks for Tim or if it clearly fits the task.
-- Tim is a young Ukrainian HR assistant, friendly and professional.
-- He wears a clean white vyshyvanka and a small HireUA badge.
-- Tim should look like a premium 3D / realistic brand character, not a generic robot.
-
-COMPOSITION RULES:
-- Clear focal point.
-- Premium commercial layout.
-- Realistic environment or polished 3D environment.
-- No clutter.
-- No distorted faces, hands, logos or unreadable interface elements.
-- No random extra people unless useful for the advertising idea.
-
-CLIENT TASK / SOURCE DATA:
+Дані з форми ContentBriefs:
 {content_brief_text(data)}
 
-STORY / REELS SERIES CONTEXT:
+Історія / подія для серії Reels/Shorts:
 {story}
 
-CLIENT EDITS OR ADDITIONAL REQUESTS:
+Правки або додаткові побажання клієнта:
 {client_comment}
 
-Final goal: produce a visually strong advertising image that can be used as a professional HireUA banner after text overlay is added separately.
+Якщо клієнт просив використати Тіма — додай дружнього AI HR-помічника Тіма у стилі HireUA.
 """
 
     try:
         response = await asyncio.to_thread(
             openai_client.images.generate,
-            model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1"),
+            model="gpt-image-1",
             prompt=prompt,
             size="1024x1536",
-            quality="high",
         )
 
         image_base64 = response.data[0].b64_json
@@ -1585,6 +1560,83 @@ async def send_tim_generated_files(update: Update, files: list, caption: str):
                 photo=photo,
                 caption=caption if i == 1 else f"Слайд / банер {i}"
             )
+
+
+async def build_creative_plan(order_type: str, idea: str, extra: str = "") -> str:
+    """Генерує ідеї/сценарій для клієнта до генерації зображень."""
+    if order_type == "reels_series":
+        task = (
+            "Ти креативний продюсер HireUA. Клієнт дав коротку ідею для Reels/Shorts. "
+            "Не проси клієнта писати довгий промпт. Сам запропонуй 3 сильні концепції ролика. "
+            "Пиши українською або російською залежно від мови клієнта. "
+            "Формат відповіді: короткий вступ, 1️⃣ концепція, 2️⃣ концепція, 3️⃣ концепція, "
+            "потім питання: 'Яку концепцію беремо або що змінити?'"
+        )
+    else:
+        task = (
+            "Ти креативний дизайнер і маркетолог HireUA. Клієнт дав коротку ідею для банера. "
+            "Не проси клієнта писати довгий промпт. Сам запропонуй 3 сильні концепції банера. "
+            "Пиши українською або російською залежно від мови клієнта. "
+            "Формат відповіді: короткий вступ, 1️⃣ концепція, 2️⃣ концепція, 3️⃣ концепція, "
+            "потім питання: 'Який варіант беремо або що змінити?'"
+        )
+
+    response = await asyncio.to_thread(
+        openai_client.responses.create,
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": task},
+            {"role": "user", "content": f"Ідея клієнта:\n{idea}\n\nДодаткові правки/вибір:\n{extra}"},
+        ],
+    )
+    return getattr(response, "output_text", "") or "Не зміг підготувати ідеї. Спробуйте описати задачу ще раз."
+
+
+async def build_reels_story(idea: str, concept_choice: str, edits: str = "") -> str:
+    """Генерує сценарій Reels з 5 кадрів перед створенням картинок."""
+    response = await asyncio.to_thread(
+        openai_client.responses.create,
+        model="gpt-4.1-mini",
+        input=[
+            {
+                "role": "system",
+                "content": (
+                    "Ти креативний продюсер HireUA. На основі ідеї та вибраної концепції створи сценарій Reels/Shorts з 5 кадрів. "
+                    "Не генеруй зображення. Потрібен тільки сценарій для погодження. "
+                    "Кожен кадр має містити: що бачимо, короткий текст на екрані, настрій/стиль. "
+                    "Пиши зрозуміло, як для клієнта. Наприкінці запитай: 'Підходить? Якщо так — напишіть УЗГОДЖЕНО. Якщо ні — напишіть правки.'"
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Ідея клієнта:\n{idea}\n\nВибір/концепція клієнта:\n{concept_choice}\n\nПравки:\n{edits}",
+            },
+        ],
+    )
+    return getattr(response, "output_text", "") or "Не зміг підготувати сценарій. Спробуйте описати задачу ще раз."
+
+
+async def build_banner_brief(idea: str, concept_choice: str, edits: str = "") -> str:
+    """Готує фінальний креативний опис банера для погодження перед генерацією."""
+    response = await asyncio.to_thread(
+        openai_client.responses.create,
+        model="gpt-4.1-mini",
+        input=[
+            {
+                "role": "system",
+                "content": (
+                    "Ти артдиректор HireUA. На основі ідеї та вибраної концепції створи короткий фінальний опис банера для погодження. "
+                    "Не генеруй зображення. Опиши композицію, головний візуал, стиль, акценти, що має відчувати клієнт. "
+                    "Наприкінці запитай: 'Підходить? Якщо так — напишіть УЗГОДЖЕНО. Якщо ні — напишіть правки.'"
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Ідея клієнта:\n{idea}\n\nВибір/концепція клієнта:\n{concept_choice}\n\nПравки:\n{edits}",
+            },
+        ],
+    )
+    return getattr(response, "output_text", "") or "Не зміг підготувати опис банера. Спробуйте описати задачу ще раз."
 
 
 async def generate_first_content_version(update: Update, context: ContextTypes.DEFAULT_TYPE, order: dict):
@@ -1654,8 +1706,10 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
     upper_text = text.upper()
     data = order.get("data", {})
     order_type = order.get("order_type", "banner")
+    stage = order.get("stage") or ("awaiting_idea" if not order.get("last_files") else "generated")
 
-    if "УЗГОДЖЕНО" in upper_text and "КЛІЄНТ" in upper_text:
+    # Фінальне погодження вже готових матеріалів для передачі адміну.
+    if stage == "generated" and "УЗГОДЖЕНО" in upper_text and "КЛІЄНТ" in upper_text:
         order["status"] = "УЗГОДЖЕНО Клієнтом ✅"
         update_content_brief_status_in_sheet(update.effective_user.id, order["status"])
         await send_final_content_to_admin(update, context, order)
@@ -1666,36 +1720,103 @@ async def tim_content_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop("tim_content_order", None)
         return True
 
-    if order.get("waiting_story"):
-        order["waiting_story"] = False
-        order["story_received"] = True
-        order["story"] = text
+    # 1) Клієнт дав коротку ідею. Тім сам пропонує концепції.
+    if stage == "awaiting_idea":
+        order["idea"] = text
+        order["stage"] = "waiting_concept_choice"
+        await update.message.reply_text("Дякую ✅ Зараз запропоную кілька ідей.")
+        concepts = await build_creative_plan(order_type, text)
+        order["concepts"] = concepts
         await update.message.reply_text(
-            "Дякую ✅\n"
-            "Я підготую серію з 5 банерів для Reels / Shorts на основі вашої історії."
-        )
-        paths = []
-        for i in range(1, 6):
-            path = await generate_tim_banner(update, context, data, story=text, slide_number=i)
-            if path:
-                paths.append(path)
-        order["last_files"] = paths
-        await send_tim_generated_files(
-            update,
-            paths,
-            "Ось серія банерів для Reels / Shorts ✅\n\n"
-            "На кожному банері додано водяний знак @UkraineHire.\n\n"
-            "Перегляньте всі 5 слайдів. Якщо потрібні правки — напишіть, що змінити.\n"
-            "Коли все сподобається, напишіть:\nУЗГОДЖЕНО Клієнтом ✅"
+            concepts +
+            "\n\nНапишіть номер варіанту або коротко, що змінити."
         )
         return True
 
-    # Будь-яке інше повідомлення в цьому режимі — це правки клієнта або текст до публікації.
+    # 2) Для банера: клієнт вибрав концепцію або дав правки — готуємо фінальний опис для погодження.
+    if order_type != "reels_series" and stage == "waiting_concept_choice":
+        order.setdefault("client_edits", []).append(text)
+        idea = order.get("idea", "")
+        edits = "\n".join(order.get("client_edits", []))
+        brief = await build_banner_brief(idea, text, edits)
+        order["final_brief"] = brief
+        order["stage"] = "waiting_banner_approval"
+        await update.message.reply_text(brief)
+        return True
+
+    # 3) Для банера: правки до опису або погодження. Генеруємо тільки після УЗГОДЖЕНО.
+    if order_type != "reels_series" and stage == "waiting_banner_approval":
+        if "УЗГОДЖЕНО" in upper_text:
+            await update.message.reply_text("✅ Погоджено. Готую банер.")
+            final_prompt = order.get("final_brief") or order.get("idea", "")
+            path = await generate_tim_banner(update, context, data, client_comment=final_prompt)
+            if path:
+                order["last_files"] = [path]
+                order["stage"] = "generated"
+                await send_tim_generated_files(
+                    update,
+                    [path],
+                    "Ось перший варіант ✅\n\n"
+                    "Якщо потрібно щось змінити — напишіть правки, і я перероблю.\n"
+                    "Коли все сподобається, напишіть:\nУЗГОДЖЕНО Клієнтом ✅"
+                )
+            return True
+
+        order.setdefault("client_edits", []).append(text)
+        idea = order.get("idea", "")
+        edits = "\n".join(order.get("client_edits", []))
+        brief = await build_banner_brief(idea, order.get("final_brief", ""), edits)
+        order["final_brief"] = brief
+        await update.message.reply_text(brief)
+        return True
+
+    # 4) Для Reels: клієнт вибрав концепцію або дав правки — готуємо сценарій з 5 кадрів.
+    if order_type == "reels_series" and stage == "waiting_concept_choice":
+        order.setdefault("client_edits", []).append(text)
+        idea = order.get("idea", "")
+        edits = "\n".join(order.get("client_edits", []))
+        story = await build_reels_story(idea, text, edits)
+        order["story"] = story
+        order["stage"] = "waiting_reels_approval"
+        await update.message.reply_text(story)
+        return True
+
+    # 5) Для Reels: правки до сценарію або погодження. Кадри генеруємо тільки після УЗГОДЖЕНО.
+    if order_type == "reels_series" and stage == "waiting_reels_approval":
+        if "УЗГОДЖЕНО" in upper_text:
+            await update.message.reply_text("✅ Сценарій погоджено. Готую серію з 5 кадрів.")
+            paths = []
+            story = order.get("story", "")
+            for i in range(1, 6):
+                await update.message.reply_text(f"Готую кадр {i}/5...")
+                path = await generate_tim_banner(update, context, data, story=story, slide_number=i)
+                if path:
+                    paths.append(path)
+            order["last_files"] = paths
+            order["stage"] = "generated"
+            await send_tim_generated_files(
+                update,
+                paths,
+                "Ось серія банерів для Reels / Shorts ✅\n\n"
+                "Перегляньте всі 5 слайдів. Якщо потрібні правки — напишіть, що змінити.\n"
+                "Коли все сподобається, напишіть:\nУЗГОДЖЕНО Клієнтом ✅"
+            )
+            return True
+
+        order.setdefault("client_edits", []).append(text)
+        idea = order.get("idea", "")
+        edits = "\n".join(order.get("client_edits", []))
+        story = await build_reels_story(idea, order.get("story", ""), edits)
+        order["story"] = story
+        await update.message.reply_text(story)
+        return True
+
+    # 6) Після генерації: будь-які повідомлення — це правки до готових матеріалів або текст до публікації.
     order.setdefault("client_edits", []).append(text)
     order["publish_text"] = text if any(word in upper_text for word in ("ТЕКСТ", "ОПИС", "CAPTION", "ПІДПИС")) else order.get("publish_text", "")
 
     if order_type == "reels_series":
-        await update.message.reply_text("Зрозумів правки ✅ Переробляю серію з 5 банерів. Водяний знак @UkraineHire буде на кожному банері.")
+        await update.message.reply_text("Зрозумів правки ✅ Переробляю серію з 5 банерів.")
         paths = []
         story = order.get("story", "")
         all_edits = "\n".join(order.get("client_edits", []))
