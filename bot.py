@@ -2558,10 +2558,12 @@ WATERMARK_TEXT = "@UkraineHire"
 
 
 def add_watermark_to_image(image_path: str) -> str:
-    """Adds visible HireUA watermark to every generated image.
+    """Adds a guaranteed visible HireUA watermark to every generated image.
 
-    First tries PNG/JPG from Drive Tim/Brand. If not found or bad, adds a strong
-    text fallback. Never returns an unwatermarked image unless Pillow is missing.
+    This function ALWAYS draws a visible top-left HireUA badge by code.
+    If Drive / Tim / Brand / watermark.png is found, it also places that PNG,
+    but it never relies only on the PNG because white transparent watermarks can
+    disappear on light images.
     """
     if Image is None or ImageDraw is None:
         return image_path
@@ -2570,30 +2572,35 @@ def add_watermark_to_image(image_path: str) -> str:
         img = Image.open(image_path).convert("RGBA")
         width, height = img.size
 
+        # 1) Optional Drive PNG watermark, placed in bottom-right as a soft brand stamp.
         watermark_path = get_brand_watermark_path()
         if watermark_path and os.path.exists(watermark_path):
             try:
                 wm = Image.open(watermark_path).convert("RGBA")
-                target_w = max(190, int(width * 0.22))
+                target_w = max(220, int(width * 0.24))
                 scale = target_w / max(1, wm.size[0])
                 target_h = max(1, int(wm.size[1] * scale))
                 wm = wm.resize((target_w, target_h), Image.LANCZOS)
-                alpha = wm.getchannel("A").point(lambda a: int(a * 0.82))
+                alpha = wm.getchannel("A").point(lambda a: int(a * 0.55))
                 wm.putalpha(alpha)
-                x = int(width * 0.035)
-                y = int(height * 0.025)
+                x = width - target_w - int(width * 0.035)
+                y = height - target_h - int(height * 0.035)
                 img.alpha_composite(wm, (x, y))
-                output_path = os.path.splitext(image_path)[0] + "_watermark.png"
-                img.save(output_path)
-                return output_path
+                print(f"WATERMARK PNG APPLIED: {watermark_path}", flush=True)
             except Exception as e:
                 print("PNG WATERMARK APPLY ERROR:", e, flush=True)
+        else:
+            print("WATERMARK PNG NOT FOUND - USING CODE BADGE", flush=True)
 
-        # Strong fallback watermark: must be visible if Drive logo was not found.
+        # 2) Mandatory visible code watermark. This guarantees no image leaves unbranded.
         draw = ImageDraw.Draw(img)
         font_size = max(34, int(width * 0.045))
         font = None
-        for font_path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arial.ttf"):
+        for font_path in (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            "arial.ttf",
+        ):
             try:
                 font = ImageFont.truetype(font_path, font_size)
                 break
@@ -2602,26 +2609,32 @@ def add_watermark_to_image(image_path: str) -> str:
         if font is None:
             font = ImageFont.load_default()
 
-        text = WATERMARK_TEXT
+        text = "HireUA"
         x = int(width * 0.035)
         y = int(height * 0.025)
-        padding_x = max(18, int(width * 0.018))
-        padding_y = max(12, int(width * 0.012))
+        pad_x = max(18, int(width * 0.018))
+        pad_y = max(12, int(width * 0.012))
         bbox = draw.textbbox((x, y), text, font=font)
-        rect = (bbox[0] - padding_x, bbox[1] - padding_y, bbox[2] + padding_x, bbox[3] + padding_y)
+        rect = (bbox[0] - pad_x, bbox[1] - pad_y, bbox[2] + pad_x, bbox[3] + pad_y)
+
         overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
-        overlay_draw = ImageDraw.Draw(overlay)
-        overlay_draw.rounded_rectangle(rect, radius=20, fill=(0, 31, 95, 175))
+        od = ImageDraw.Draw(overlay)
+        od.rounded_rectangle(rect, radius=max(16, int(width * 0.018)), fill=(0, 28, 85, 185))
         img = Image.alpha_composite(img, overlay)
         draw = ImageDraw.Draw(img)
-        draw.text((x, y), text, fill=(255, 255, 255, 245), font=font)
+
+        # dark outline + white text for readability on any background
+        for dx, dy in ((-2,0),(2,0),(0,-2),(0,2),(-1,-1),(1,1)):
+            draw.text((x+dx, y+dy), text, font=font, fill=(0, 0, 0, 160))
+        draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+
         output_path = os.path.splitext(image_path)[0] + "_watermark.png"
         img.save(output_path)
+        print(f"WATERMARK FINAL SAVED: {output_path}", flush=True)
         return output_path
     except Exception as e:
         print("WATERMARK ERROR:", e, flush=True)
         return image_path
-
 
 
 
@@ -2690,7 +2703,8 @@ Do not replace Tim with robots or generic mascots.
 
 TEXT RULES:
 Do not create a lot of text inside the image. If text appears, it must be minimal and clean.
-Focus mainly on strong visual, composition and emotion. Text overlays can be added later.
+If salary, numbers, position, company name, phone, address or CTA are present in the client data, use them exactly as written. Do not invent or change numbers.
+Focus mainly on strong visual, composition and emotion.
 
 CLIENT / TASK DATA:
 {content_brief_text(data)}
@@ -2783,6 +2797,8 @@ Edit the provided image according to the client's request.
 IMPORTANT:
 Preserve the main composition and identity of the original image unless the client asks to change it.
 Do not create a completely unrelated new image.
+When the client asks to change ONLY clothing, pose, color, background or style, DO NOT change salary, numbers, job title, offer text, company name, phone, address or CTA.
+All existing important text and numbers must remain exactly the same unless the client explicitly asks to change that exact text.
 Keep professional premium advertising quality.
 Keep vertical social media banner style.
 Improve design, lighting, colors and readability when useful.
