@@ -2622,6 +2622,20 @@ def add_watermark_to_image(image_path: str) -> str:
         return image_path
 
 
+
+
+def content_brief_text(data):
+    if not data:
+        return ""
+    lines=[]
+    for key, value in data.items():
+        if value is None:
+            continue
+        if isinstance(value,(list,tuple,set)):
+            value=", ".join(str(v) for v in value)
+        lines.append(f"{key}: {value}")
+    return "\n".join(lines)
+
 async def generate_tim_image_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE, data: dict, client_comment: str = "", slide_number: int = None, story: str = ""):
     """Створює нове зображення з текстового опису. Тім додається за замовчуванням."""
     data = data or {}
