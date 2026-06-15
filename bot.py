@@ -1249,19 +1249,84 @@ def load_tim_profile_text() -> str:
         return _tim_profile_cache
 
 
-def client_asked_without_tim(text: str, data: dict | None = None) -> bool:
-    combined = " ".join([
+def _tim_decision_text(text: str = "", data: dict | None = None) -> str:
+    """Collects only textual instructions that can change Tim logic.
+
+    Important: uploaded product/logo/interior photos do NOT disable Tim by themselves.
+    Tim is disabled only when the user explicitly asks to remove Tim or to use
+    their own person/avatar/photo instead of Tim.
+    """
+    data = data or {}
+    return " ".join([
         str(text or ""),
-        str((data or {}).get("tim", "")),
-        str((data or {}).get("wishes", "")),
-        str((data or {}).get("style", "")),
+        str(data.get("tim", "")),
+        str(data.get("wishes", "")),
+        str(data.get("style", "")),
+        str(data.get("materials", "")),
+        str(data.get("main_info", "")),
     ]).lower()
+
+
+def client_explicitly_wants_tim(text: str, data: dict | None = None) -> bool:
+    combined = _tim_decision_text(text, data)
+    positive_patterns = [
+        "з тімом", "с тимом", "додай тіма", "добавь тима", "добавити тіма", "добавить тима",
+        "тім поруч", "тим рядом", "разом з тімом", "вместе с тимом", "і тіма", "и тима",
+        "залишити тіма", "оставить тима", "не убирай тима", "не прибирай тіма",
+    ]
+    return any(p in combined for p in positive_patterns)
+
+
+def client_asked_without_tim(text: str, data: dict | None = None) -> bool:
+    combined = _tim_decision_text(text, data)
     negative_patterns = [
-        "без тіма", "без тима", "без tim", "без персонажа", "без героя", "без чоловіка", "без человека",
-        "прибрати тіма", "прибрати тима", "убрать тима", "убери тима", "не добавляй тима", "не додавай тіма",
-        "тільки товар", "только товар", "лише товар", "без людей", "без людей на фото", "без людини", "без человека",
+        "без тіма", "без тима", "без tim",
+        "прибрати тіма", "прибрати тима", "убрать тима", "убери тима",
+        "не добавляй тима", "не додавай тіма", "не використовуй тіма", "не используй тима",
+        "без персонажа hireua", "без персонажа hire ua",
     ]
     return any(p in combined for p in negative_patterns)
+
+
+def client_requested_own_avatar_or_person_instead_of_tim(text: str, data: dict | None = None) -> bool:
+    """Detects explicit user intent to use THEIR person/avatar/photo instead of Tim.
+
+    This must not trigger for product, store, logo, interior or brand photos.
+    It triggers only from the user's words, not from the existence of an uploaded image.
+    """
+    combined = _tim_decision_text(text, data)
+    replacement_patterns = [
+        "мой аватар", "моего аватара", "моим аватаром", "свой аватар", "своего аватара",
+        "мій аватар", "мого аватара", "свій аватар", "свого аватара",
+        "этого аватара", "цей аватар", "цього аватара", "этот аватар",
+        "моё фото", "мое фото", "мою фотографию", "мою фотку", "моє фото", "мою фотографію",
+        "фото сотрудника", "фото співробітника", "фото директора", "фото менеджера",
+        "этого человека", "цього чоловіка", "цю людину", "этого мужчину", "эту девушку",
+        "используй этого человека", "використовуй цю людину", "поставь этого человека", "постав цього",
+        "замість тіма", "заместь тима", "вместо тима", "замість тима",
+        "не тім", "не тим",
+        "только мой аватар", "тільки мій аватар", "только мое фото", "тільки моє фото",
+    ]
+    return any(p in combined for p in replacement_patterns)
+
+
+def should_use_tim(text: str = "", data: dict | None = None) -> bool:
+    """Single source of truth for Tim.
+
+    Tim is the default HireUA character. Use Tim unless:
+    - the user explicitly asks to remove Tim;
+    - the user explicitly asks to use their own person/avatar/photo instead of Tim.
+
+    Product, store, logo, interior and general client materials do NOT disable Tim.
+    Explicit request to add/keep Tim overrides ambiguous avatar/photo wording.
+    """
+    if client_explicitly_wants_tim(text, data):
+        return True
+    if client_asked_without_tim(text, data):
+        return False
+    if client_requested_own_avatar_or_person_instead_of_tim(text, data):
+        return False
+    return True
 
 
 def get_tim_reference_image_path(prefer_full_body: bool = True) -> str | None:
@@ -2561,15 +2626,16 @@ async def generate_tim_image_from_text(update: Update, context: ContextTypes.DEF
     else:
         task = "Create one premium vertical advertising banner."
 
-    use_tim = not client_asked_without_tim(client_comment, data)
+    use_tim = should_use_tim(client_comment, data)
     tim_profile = load_tim_profile_text()
     tim_instruction = ""
     if use_tim:
         tim_instruction = f"""
 TIM IS REQUIRED BY DEFAULT:
-Add Tim, the official HireUA character, to this banner unless it would physically block the client's product or key offer.
-Use the provided Tim reference image as the identity reference when available.
-Tim must look like the same HireUA character from the Drive library, not a random man.
+Tim is the default HireUA character and must be present in the banner unless the client explicitly asked to remove Tim or to use their own person/avatar/photo instead of Tim.
+Client product photos, store photos, logos, interiors, brand materials or goods do NOT cancel Tim. In those cases, combine the client material with Tim.
+Use the provided Tim reference image as the identity reference.
+Tim must look like the same HireUA character from the Drive library, not a random man and not a different avatar.
 Keep Tim recognizable: black hair, blue eyes, friendly professional Ukrainian HR assistant, HireUA badge or branded element.
 Tim may wear clothing that fits the task, but keep the same face and character identity.
 
@@ -2578,8 +2644,8 @@ TIM_PROFILE FROM DRIVE:
 """
     else:
         tim_instruction = """
-CLIENT REQUESTED NO TIM:
-Do not add Tim or any human mascot. Focus on product/service/client brand. Still keep HireUA premium style and watermark.
+CLIENT REQUESTED NO TIM OR OWN AVATAR/PERSON INSTEAD OF TIM:
+Do not add Tim. If the client provided their own person/avatar/photo and asked to use it, use that client character/person instead. Still keep HireUA premium style and watermark.
 """
 
     prompt = f"""
@@ -2618,32 +2684,33 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
 """
 
     def _generate_with_optional_tim_reference():
-        # If Tim is required, try image edit with a Tim reference from Drive.
-        # If OpenAI SDK/model rejects reference editing, fallback to normal text generation.
+        # If Tim is required, we must use a Tim reference from Drive.
+        # Otherwise the model can invent a random man, which is not allowed.
         if use_tim:
             ref_path = get_tim_reference_image_path(prefer_full_body=not bool(slide_number))
-            if ref_path and os.path.exists(ref_path):
-                try:
-                    with open(ref_path, "rb") as ref_img:
-                        try:
-                            return openai_client.images.edit(
-                                model=OPENAI_IMAGE_MODEL,
-                                image=ref_img,
-                                prompt=prompt + "\nUse the provided image only as a character reference for Tim. Create a new premium banner composition.",
-                                size="1024x1536",
-                                quality="high",
-                            )
-                        except TypeError:
-                            ref_img.seek(0)
-                            return openai_client.images.edit(
-                                model=OPENAI_IMAGE_MODEL,
-                                image=[ref_img],
-                                prompt=prompt + "\nUse the provided image only as a character reference for Tim. Create a new premium banner composition.",
-                                size="1024x1536",
-                                quality="high",
-                            )
-                except Exception as e:
-                    print("TIM REFERENCE IMAGE EDIT FALLBACK:", e, flush=True)
+            if not ref_path or not os.path.exists(ref_path):
+                raise RuntimeError("TIM_REFERENCE_NOT_FOUND: add Tim images to Drive / Tim / Avatar_Main or Full Body")
+            try:
+                with open(ref_path, "rb") as ref_img:
+                    try:
+                        return openai_client.images.edit(
+                            model=OPENAI_IMAGE_MODEL,
+                            image=ref_img,
+                            prompt=prompt + "\nUse the provided image as the mandatory identity reference for Tim. Create a new premium banner composition with the same Tim character.",
+                            size="1024x1536",
+                            quality="high",
+                        )
+                    except TypeError:
+                        ref_img.seek(0)
+                        return openai_client.images.edit(
+                            model=OPENAI_IMAGE_MODEL,
+                            image=[ref_img],
+                            prompt=prompt + "\nUse the provided image as the mandatory identity reference for Tim. Create a new premium banner composition with the same Tim character.",
+                            size="1024x1536",
+                            quality="high",
+                        )
+            except Exception as e:
+                raise RuntimeError(f"TIM_REFERENCE_EDIT_FAILED: {e}")
 
         return openai_client.images.generate(
             model=OPENAI_IMAGE_MODEL,
@@ -2668,10 +2735,10 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
         return add_watermark_to_image(file_path)
     except Exception as e:
         print("TIM IMAGE GENERATION ERROR:", e, flush=True)
-        await safe_reply_text(
-            update,
-            "⚠️ Не вдалося згенерувати зображення автоматично. Спробуйте ще раз трохи пізніше."
-        )
+        msg = "⚠️ Не вдалося згенерувати зображення автоматично. Спробуйте ще раз трохи пізніше."
+        if "TIM_REFERENCE" in str(e):
+            msg = "⚠️ Не знайшов референс Тіма в Google Drive. Перевірте папки Tim / Avatar_Main або Tim / Full Body."
+        await safe_reply_text(update, msg)
         return None
 
 
@@ -2681,7 +2748,7 @@ async def edit_tim_image(update: Update, context: ContextTypes.DEFAULT_TYPE, bas
     if not base_image_path or not os.path.exists(base_image_path):
         return await generate_tim_image_from_text(update, context, data, client_comment=client_comment, slide_number=slide_number, story=story)
 
-    use_tim = not client_asked_without_tim(client_comment, data)
+    use_tim = should_use_tim(client_comment, data)
     tim_profile = load_tim_profile_text()
     prompt = f"""
 Edit the provided image according to the client's request.
@@ -2697,9 +2764,10 @@ If text must be changed, make it clean and minimal.
 Leave space in the upper-left corner for a HireUA watermark. A PNG watermark from Google Drive folder Tim/Brand will be added automatically after generation.
 
 TIM RULE:
-If the image contains Tim, preserve Tim's identity exactly: black hair, blue eyes, friendly HireUA HR assistant, recognizable HireUA badge/branded element.
-If client did not ask to remove Tim, keep Tim in the banner or add him if it fits the edit.
-If client explicitly asked to remove Tim, remove Tim and do not add any human mascot.
+Tim is the default HireUA character. If use_tim=True, keep Tim in the banner or add Tim using the provided Tim reference image.
+Uploaded product/store/logo/interior/brand materials do NOT cancel Tim. Combine them with Tim unless the client explicitly asked to remove Tim or use their own person/avatar/photo instead.
+If use_tim=False, do not add Tim. If the client provided their own person/avatar/photo and asked to use it, use that client character/person instead.
+When Tim is present, preserve Tim's identity exactly: black hair, blue eyes, friendly HireUA HR assistant, recognizable HireUA badge/branded element.
 
 TIM_PROFILE FROM DRIVE:
 {tim_profile if use_tim else "Client requested no Tim."}
@@ -2715,8 +2783,34 @@ CLIENT EDIT REQUEST:
 """
 
     def _edit_single_image():
-        # Different SDK versions accept either image=file or image=[file]. Try both safely.
+        # If Tim is required, pass both the base/client image and a Tim reference.
+        ref_path = get_tim_reference_image_path(prefer_full_body=not bool(slide_number)) if use_tim else None
+        if use_tim and (not ref_path or not os.path.exists(ref_path)):
+            raise RuntimeError("TIM_REFERENCE_NOT_FOUND: add Tim images to Drive / Tim / Avatar_Main or Full Body")
+
         with open(base_image_path, "rb") as img:
+            if use_tim and ref_path:
+                with open(ref_path, "rb") as ref_img:
+                    try:
+                        return openai_client.images.edit(
+                            model=OPENAI_IMAGE_MODEL,
+                            image=[img, ref_img],
+                            prompt=prompt + "\nUse the first image as the client/base material. Use the second image as the mandatory identity reference for Tim.",
+                            size="1024x1536",
+                            quality="high",
+                        )
+                    except TypeError:
+                        # Older SDK fallback: edit only the base image but keep strict text instruction.
+                        img.seek(0)
+                        return openai_client.images.edit(
+                            model=OPENAI_IMAGE_MODEL,
+                            image=img,
+                            prompt=prompt + "\nTim must match the official Tim HireUA character from TIM_PROFILE. Do not invent a random person.",
+                            size="1024x1536",
+                            quality="high",
+                        )
+
+            # No Tim: edit only the provided client/base image.
             try:
                 return openai_client.images.edit(
                     model=OPENAI_IMAGE_MODEL,
@@ -2750,6 +2844,9 @@ CLIENT EDIT REQUEST:
         return add_watermark_to_image(file_path)
     except Exception as e:
         print("TIM IMAGE EDIT ERROR:", e, flush=True)
+        if "TIM_REFERENCE" in str(e):
+            await safe_reply_text(update, "⚠️ Не знайшов референс Тіма в Google Drive. Перевірте папки Tim / Avatar_Main або Tim / Full Body.")
+            return None
         await safe_reply_text(
             update,
             "⚠️ Не вдалося відредагувати зображення. Я спробую створити новий варіант за вашими правками."
