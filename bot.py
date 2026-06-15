@@ -22,6 +22,7 @@ os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 import asyncio
 import threading
 import time as time_module
+import random
 import tempfile
 from copy import deepcopy
 from datetime import datetime, timedelta
@@ -94,15 +95,34 @@ PACKAGES = {
     "business": ("Business", ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]),
 }
 
-# Автоматичні вікна публікацій.
-# Бот сам ставить публікації у найближчий вільний слот кожні 5 хвилин.
+# === STAGE 5: розумний планувальник публікацій ===
+# Публікації не летять пачкою. Бот розкладає їх по блоках дня
+# і додає випадкове зміщення, щоб розклад виглядав природно.
 SCHEDULE_FILE = "scheduled_posts.json"
-SLOT_WINDOWS = [
-    (8, 10),
-    (12, 14),
-    (16, 18),
-    (18, 20),
-]
+
+DAY_PARTS = {
+    "morning": (8, 0, 11, 30),
+    "day": (12, 0, 16, 30),
+    "evening": (17, 0, 22, 0),
+}
+
+PACKAGE_DAY_DISTRIBUTION = {
+    "single": ["now"],
+    "start": ["morning", "day", "evening"],
+    "business": ["morning", "morning", "day", "day", "evening", "evening"],
+}
+
+PLATFORM_MIN_GAP_MINUTES = {
+    "telegram": 5,
+    "facebook": 15,
+    "instagram": 20,
+    "youtube": 20,
+}
+
+# Для нового каналу YouTube краще не пробивати денний upload-limit.
+YOUTUBE_DAILY_LIMIT = int(os.getenv("YOUTUBE_DAILY_LIMIT", "10"))
+
+# Крок пошуку всередині блоку. Чим менше крок, тим більш природний розклад.
 SLOT_STEP_MINUTES = 5
 
 sessions = {}
@@ -930,53 +950,201 @@ def slot_key(dt: datetime) -> str:
     return dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d %H:%M")
 
 
-def day_slots(day_dt: datetime):
+def slot_day_key(dt: datetime) -> str:
+    return dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d")
+
+
+def selected_platforms(session: dict) -> list[str]:
+    platforms = []
+
+    if session.get("telegram", {}).get("banner") or session.get("telegram", {}).get("reels") or session.get("telegram", {}).get("text"):
+        platforms.append("telegram")
+    if session.get("facebook", {}).get("banner") or session.get("facebook", {}).get("reels") or session.get("facebook", {}).get("text"):
+        platforms.append("facebook")
+    if session.get("instagram", {}).get("banner") or session.get("instagram", {}).get("reels"):
+        platforms.append("instagram")
+    if session.get("youtube", {}).get("reels"):
+        platforms.append("youtube")
+
+    return platforms
+
+
+def entry_platforms(entry: dict) -> list[str]:
+    return entry.get("platforms") or selected_platforms(entry.get("session") or {})
+
+
+def is_active_schedule_entry(entry: dict) -> bool:
+    return entry.get("status") in (None, "pending", "running") and bool(entry.get("slot"))
+
+
+def day_part_bounds(day_dt: datetime, part: str):
     day_dt = day_dt.astimezone(KYIV_TZ)
+    start_hour, start_minute, end_hour, end_minute = DAY_PARTS[part]
+    start = day_dt.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+    end = day_dt.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+    return start, end
+
+
+def slots_for_day_part(day_dt: datetime, part: str):
+    start, end = day_part_bounds(day_dt, part)
     slots = []
+    current = start
 
-    for start_hour, end_hour in SLOT_WINDOWS:
-        current = day_dt.replace(hour=start_hour, minute=0, second=0, microsecond=0)
-        end = day_dt.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+    while current < end:
+        slots.append(current)
+        current += timedelta(minutes=SLOT_STEP_MINUTES)
 
-        while current < end:
-            slots.append(current)
-            current += timedelta(minutes=SLOT_STEP_MINUTES)
-
+    # Рандом всередині блоку: різні клієнти не отримують однаковий порядок слотів.
+    random.shuffle(slots)
     return slots
 
 
-def find_free_slots(count: int, start_from: datetime | None = None):
+def platform_gap_ok(candidate: datetime, candidate_platforms: list[str], entries: list[dict]) -> bool:
+    candidate = candidate.astimezone(KYIV_TZ)
+
+    for entry in entries:
+        if not is_active_schedule_entry(entry):
+            continue
+
+        try:
+            other = datetime.fromisoformat(entry.get("run_at") or entry.get("slot"))
+        except Exception:
+            continue
+
+        if other.tzinfo is None:
+            other = KYIV_TZ.localize(other)
+        else:
+            other = other.astimezone(KYIV_TZ)
+
+        common_platforms = set(candidate_platforms) & set(entry_platforms(entry))
+        if not common_platforms:
+            continue
+
+        for platform in common_platforms:
+            min_gap = PLATFORM_MIN_GAP_MINUTES.get(platform, 5)
+            if abs((candidate - other).total_seconds()) < min_gap * 60:
+                return False
+
+    return True
+
+
+def youtube_day_count(entries: list[dict], day_dt: datetime) -> int:
+    day_key = slot_day_key(day_dt)
+    count = 0
+
+    for entry in entries:
+        if not is_active_schedule_entry(entry):
+            continue
+        if "youtube" not in entry_platforms(entry):
+            continue
+        if str(entry.get("slot", "")).startswith(day_key):
+            count += 1
+
+    return count
+
+
+def find_free_slots_for_session(session: dict, start_from: datetime | None = None):
     entries = load_schedule_entries()
-    used = {
-        entry.get("slot")
-        for entry in entries
-        if entry.get("status") in (None, "pending", "running") and entry.get("slot")
-    }
+    platforms = selected_platforms(session)
+    package_key = session.get("package", "single")
+    days = int(session.get("days", 1))
+    distribution = PACKAGE_DAY_DISTRIBUTION.get(package_key, PACKAGE_DAY_DISTRIBUTION["start"])
 
     now = start_from or datetime.now(KYIV_TZ)
     earliest = now + timedelta(minutes=1)
-    free_slots = []
+    planned_slots = []
 
-    for day_offset in range(0, 60):
-        day_dt = now + timedelta(days=day_offset)
+    for day_index in range(days):
+        day_dt = now + timedelta(days=day_index)
 
-        for slot in day_slots(day_dt):
-            key = slot_key(slot)
+        for part in distribution:
+            if part == "now":
+                # Для разової публікації ставимо найближчий безпечний слот у межах дня.
+                part_candidates = []
+                for p in ("morning", "day", "evening"):
+                    part_candidates.extend(slots_for_day_part(day_dt, p))
+                part_candidates = sorted(part_candidates)
+            else:
+                part_candidates = slots_for_day_part(day_dt, part)
 
-            if slot <= earliest:
+            chosen = None
+
+            for candidate in part_candidates:
+                candidate = candidate.astimezone(KYIV_TZ)
+
+                if candidate <= earliest:
+                    continue
+
+                if "youtube" in platforms and youtube_day_count(entries + planned_slots, candidate) >= YOUTUBE_DAILY_LIMIT:
+                    continue
+
+                if not platform_gap_ok(candidate, platforms, entries + planned_slots):
+                    continue
+
+                chosen = candidate
+                break
+
+            # Якщо конкретний блок дня забитий, шукаємо у наступні дні той самий блок.
+            search_offset = 1
+            while chosen is None and search_offset <= 60:
+                future_day = day_dt + timedelta(days=search_offset)
+                future_candidates = slots_for_day_part(future_day, part if part != "now" else "morning")
+
+                for candidate in future_candidates:
+                    if "youtube" in platforms and youtube_day_count(entries + planned_slots, candidate) >= YOUTUBE_DAILY_LIMIT:
+                        continue
+                    if not platform_gap_ok(candidate, platforms, entries + planned_slots):
+                        continue
+                    chosen = candidate
+                    break
+
+                search_offset += 1
+
+            if chosen is None:
+                return []
+
+            planned_entry = {
+                "slot": slot_key(chosen),
+                "run_at": chosen.isoformat(),
+                "status": "pending",
+                "platforms": platforms,
+                "session": session,
+            }
+            planned_slots.append(planned_entry)
+
+    return [datetime.fromisoformat(entry["run_at"]) for entry in planned_slots]
+
+
+def schedule_capacity_for_day(day_dt: datetime | None = None):
+    day_dt = (day_dt or datetime.now(KYIV_TZ)).astimezone(KYIV_TZ)
+    entries = [entry for entry in load_schedule_entries() if is_active_schedule_entry(entry)]
+    day_key = slot_day_key(day_dt)
+
+    result = {}
+    total_minutes = sum(
+        int((day_part_bounds(day_dt, part)[1] - day_part_bounds(day_dt, part)[0]).total_seconds() // 60)
+        for part in DAY_PARTS
+    )
+
+    for platform, gap in PLATFORM_MIN_GAP_MINUTES.items():
+        total = max(1, total_minutes // gap)
+        if platform == "youtube":
+            total = min(total, YOUTUBE_DAILY_LIMIT)
+
+        used = 0
+        for entry in entries:
+            if not str(entry.get("slot", "")).startswith(day_key):
                 continue
+            if platform in entry_platforms(entry):
+                used += 1
 
-            if key in used:
-                continue
+        result[platform] = {
+            "total": total,
+            "used": used,
+            "free": max(0, total - used),
+        }
 
-            used.add(key)
-            free_slots.append(slot)
-
-            if len(free_slots) >= count:
-                return free_slots
-
-    return free_slots
-
+    return result
 
 def add_schedule_entries(session: dict, slots, package_name: str):
     entries = load_schedule_entries()
@@ -989,6 +1157,7 @@ def add_schedule_entries(session: dict, slots, package_name: str):
             "slot": slot_key(slot),
             "run_at": slot.isoformat(),
             "package": package_name,
+            "platforms": selected_platforms(session),
             "created_at": datetime.now(KYIV_TZ).isoformat(),
             "session": deepcopy(session),
         }
@@ -2869,15 +3038,15 @@ async def schedule_posts(context, query, user_id, session):
     saved_session = deepcopy(session)
     days = int(session.get("days", 1))
 
-    publications_per_day = len(times)
+    publications_per_day = len(PACKAGE_DAY_DISTRIBUTION.get(session["package"], []))
     total_publications = publications_per_day * days
 
-    slots = find_free_slots(total_publications)
+    slots = find_free_slots_for_session(saved_session)
 
     if len(slots) < total_publications:
         await query.edit_message_text(
-            "⚠️ Не вдалося знайти достатньо вільних слотів на 60 днів вперед.\n"
-            "Спробуйте меншу кількість днів або очистіть scheduled_posts.json."
+            "⚠️ Не вдалося знайти достатньо безпечних слотів на 60 днів вперед.\n"
+            "Черга переповнена або денний ліміт YouTube заповнений."
         )
         return
 
@@ -2898,8 +3067,10 @@ async def schedule_posts(context, query, user_id, session):
         f"Пакет: {package_name}\n"
         f"Днів: {days}\n"
         f"Публікацій на платформу: {total_publications}\n\n"
-        f"Вікна: 08:00–10:00, 12:00–14:00, 16:00–18:00, 18:00–20:00\n"
-        f"Крок: кожні {SLOT_STEP_MINUTES} хвилин\n\n"
+        f"Вікна: ранок 08:00–11:30, день 12:00–16:30, вечір 17:00–22:00\n"
+        f"Розподіл: Start 1/1/1, Business 2/2/2\n"
+        f"YouTube ліміт: {YOUTUBE_DAILY_LIMIT} Shorts/день\n"
+        f"Інтервали: TG 5 хв, FB 15 хв, IG 20 хв, YT 20 хв\n\n"
         f"Перша: {first_slot}\n"
         f"Остання: {last_slot}\n\n"
         f"Найближчі слоти:\n{preview}"
@@ -2941,6 +3112,41 @@ async def scheduled_publish(context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+
+async def time_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not admin_only(update):
+        return
+
+    arg = " ".join(context.args).strip().lower() if getattr(context, "args", None) else ""
+    day_dt = datetime.now(KYIV_TZ)
+
+    if arg in ("tomorrow", "завтра"):
+        day_dt += timedelta(days=1)
+
+    capacity = schedule_capacity_for_day(day_dt)
+    title_day = day_dt.strftime("%d.%m.%Y")
+
+    names = {
+        "telegram": "Telegram",
+        "facebook": "Facebook",
+        "instagram": "Instagram",
+        "youtube": "YouTube Shorts",
+    }
+
+    lines = [f"📅 Слоти публікацій на {title_day}\n"]
+
+    for platform in ("telegram", "facebook", "instagram", "youtube"):
+        item = capacity[platform]
+        lines.append(
+            f"{names[platform]}:\n"
+            f"Всього: {item['total']}\n"
+            f"Зайнято: {item['used']}\n"
+            f"Вільно: {item['free']}\n"
+        )
+
+    lines.append("\nКоманди: /time — сьогодні, /time tomorrow — завтра")
+    await update.message.reply_text("\n".join(lines))
+
 async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin_only(update):
         return
@@ -2981,6 +3187,7 @@ async def run_bot():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CommandHandler("time", time_slots))
 
     # Команды клиентских анкет. Тім показывает эти же команды кнопками после GPT-ответа.
     app.add_handler(CommandHandler("Free", start_free_vacancy_form))
