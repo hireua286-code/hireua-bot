@@ -1330,38 +1330,50 @@ def should_use_tim(text: str = "", data: dict | None = None) -> bool:
 
 
 def get_tim_reference_image_path(prefer_full_body: bool = True) -> str | None:
-    """Downloads one Tim reference image from Drive. Used to keep the same Tim character."""
-    cache_key = "full" if prefer_full_body else "avatar"
+    """Downloads ONE best Tim identity reference from Drive.
+
+    Identity must come from Tim/Avatar_Main first. Full Body/series images are
+    fallback only, because collages often make the model redraw a different man.
+    """
+    cache_key = "tim_identity_reference"
     cached = _tim_assets_cache.get(cache_key)
     if cached and os.path.exists(cached):
         return cached
 
-    candidate_paths = []
-    if prefer_full_body:
-        candidate_paths = [["Tim", "Full Body"], ["Tim", "Full_Body"], ["Tim", "Avatar_Main"]]
-    else:
-        candidate_paths = [["Tim", "Avatar_Main"], ["Tim", "Full Body"], ["Tim", "Full_Body"]]
+    candidate_paths = [["Tim", "Avatar_Main"], ["Tim", "Full Body"], ["Tim", "Full_Body"]]
 
     try:
-        candidates = []
+        ranked = []
         for parts in candidate_paths:
             folder_id = get_nested_drive_folder_id(parts, create_missing=False)
             if not folder_id:
                 continue
-            files = list_drive_files(folder_id, mime_prefix="image/", limit=50)
+            folder_name = "/".join(parts).lower()
+            files = list_drive_files(folder_id, mime_prefix="image/", limit=80)
             for f in files:
                 name = (f.get("name") or "").lower()
-                if any(x in name for x in ("watermark", "logo", "json")):
+                if any(x in name for x in ("watermark", "logo", "json", "вод")):
                     continue
-                candidates.append(f)
+                score = 0
+                if "avatar_main" in folder_name:
+                    score += 1000
+                if any(x in name for x in ("avatar", "profile", "main", "face", "портрет", "tim", "тім", "тим")):
+                    score += 100
+                if any(x in name for x in ("full", "body", "collage", "grid", "series")):
+                    score -= 50
+                if "png" in (f.get("mimeType") or ""):
+                    score += 5
+                ranked.append((score, f))
 
-        if not candidates:
+        if not ranked:
             return None
 
-        chosen = random.choice(candidates[:20])
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        chosen = ranked[0][1]
         ext = ".png" if "png" in (chosen.get("mimeType") or "") else ".jpg"
         path = download_drive_file_to_temp(chosen["id"], ext)
         _tim_assets_cache[cache_key] = path
+        print(f"TIM REFERENCE SELECTED: {chosen.get('name')} score={ranked[0][0]}", flush=True)
         return path
     except Exception as e:
         print("TIM REFERENCE LOAD ERROR:", e, flush=True)
@@ -1369,7 +1381,11 @@ def get_tim_reference_image_path(prefer_full_body: bool = True) -> str | None:
 
 
 def get_brand_watermark_path() -> str | None:
-    """Downloads watermark PNG from Tim/Brand or Brand. Fallback is old text watermark."""
+    """Downloads watermark/logo image from Tim/Brand or Brand.
+
+    Prefer explicit watermark files. If file names are random, still pick the best
+    HireUA/Ukraine/logo image from Brand instead of silently skipping watermark.
+    """
     cached = _tim_assets_cache.get("watermark")
     if cached and os.path.exists(cached):
         return cached
@@ -1381,16 +1397,24 @@ def get_brand_watermark_path() -> str | None:
             folder_id = get_nested_drive_folder_id(parts, create_missing=False)
             if not folder_id:
                 continue
-            files = list_drive_files(folder_id, mime_prefix="image/", limit=50)
+            files = list_drive_files(folder_id, mime_prefix="image/", limit=80)
             for f in files:
                 name = (f.get("name") or "").lower()
+                if "tim_profile" in name or "json" in name:
+                    continue
                 score = 0
-                if "watermark" in name or "вод" in name:
-                    score += 100
-                if "hireua" in name or "hire" in name:
-                    score += 20
-                if "transparent" in name or "проз" in name or "png" in name:
-                    score += 10
+                if any(x in name for x in ("watermark", "вод", "водя")):
+                    score += 1000
+                if any(x in name for x in ("hireua", "hire ua", "hire")):
+                    score += 300
+                if any(x in name for x in ("ukraine", "укра")):
+                    score += 80
+                if any(x in name for x in ("logo", "лог", "brand")):
+                    score += 70
+                if any(x in name for x in ("transparent", "проз", "png")):
+                    score += 30
+                # File is in a Brand folder, so even random names are acceptable.
+                score += 10
                 candidates.append((score, f))
 
         if not candidates:
@@ -1401,6 +1425,7 @@ def get_brand_watermark_path() -> str | None:
         ext = ".png" if "png" in (chosen.get("mimeType") or "") else ".jpg"
         path = download_drive_file_to_temp(chosen["id"], ext)
         _tim_assets_cache["watermark"] = path
+        print(f"WATERMARK SELECTED: {chosen.get('name')} score={candidates[0][0]}", flush=True)
         return path
     except Exception as e:
         print("BRAND WATERMARK LOAD ERROR:", e, flush=True)
@@ -2532,7 +2557,11 @@ WATERMARK_TEXT = "@UkraineHire"
 
 
 def add_watermark_to_image(image_path: str) -> str:
-    """Adds HireUA watermark from Google Drive Tim/Brand. Fallback: text @UkraineHire."""
+    """Adds visible HireUA watermark to every generated image.
+
+    First tries PNG/JPG from Drive Tim/Brand. If not found or bad, adds a strong
+    text fallback. Never returns an unwatermarked image unless Pillow is missing.
+    """
     if Image is None or ImageDraw is None:
         return image_path
 
@@ -2542,30 +2571,26 @@ def add_watermark_to_image(image_path: str) -> str:
 
         watermark_path = get_brand_watermark_path()
         if watermark_path and os.path.exists(watermark_path):
-            wm = Image.open(watermark_path).convert("RGBA")
+            try:
+                wm = Image.open(watermark_path).convert("RGBA")
+                target_w = max(190, int(width * 0.22))
+                scale = target_w / max(1, wm.size[0])
+                target_h = max(1, int(wm.size[1] * scale))
+                wm = wm.resize((target_w, target_h), Image.LANCZOS)
+                alpha = wm.getchannel("A").point(lambda a: int(a * 0.82))
+                wm.putalpha(alpha)
+                x = int(width * 0.035)
+                y = int(height * 0.025)
+                img.alpha_composite(wm, (x, y))
+                output_path = os.path.splitext(image_path)[0] + "_watermark.png"
+                img.save(output_path)
+                return output_path
+            except Exception as e:
+                print("PNG WATERMARK APPLY ERROR:", e, flush=True)
 
-            # Keep watermark compact and readable: around 17-22% of banner width.
-            target_w = max(180, int(width * 0.20))
-            scale = target_w / max(1, wm.size[0])
-            target_h = max(1, int(wm.size[1] * scale))
-            wm = wm.resize((target_w, target_h), Image.LANCZOS)
-
-            # If watermark is an opaque logo on a background, make it semi-transparent.
-            alpha = wm.getchannel("A")
-            alpha = alpha.point(lambda a: int(a * 0.78))
-            wm.putalpha(alpha)
-
-            x = int(width * 0.035)
-            y = int(height * 0.025)
-            img.alpha_composite(wm, (x, y))
-
-            output_path = image_path.replace(".png", "_watermark.png")
-            img.save(output_path)
-            return output_path
-
-        # Fallback: old text watermark.
+        # Strong fallback watermark: must be visible if Drive logo was not found.
         draw = ImageDraw.Draw(img)
-        font_size = max(28, int(width * 0.04))
+        font_size = max(34, int(width * 0.045))
         font = None
         for font_path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arial.ttf"):
             try:
@@ -2576,46 +2601,25 @@ def add_watermark_to_image(image_path: str) -> str:
         if font is None:
             font = ImageFont.load_default()
 
+        text = WATERMARK_TEXT
         x = int(width * 0.035)
         y = int(height * 0.025)
-        padding = max(12, int(width * 0.015))
-        bbox = draw.textbbox((x, y), WATERMARK_TEXT, font=font)
-        rect = (bbox[0] - padding, bbox[1] - padding, bbox[2] + padding, bbox[3] + padding)
-
+        padding_x = max(18, int(width * 0.018))
+        padding_y = max(12, int(width * 0.012))
+        bbox = draw.textbbox((x, y), text, font=font)
+        rect = (bbox[0] - padding_x, bbox[1] - padding_y, bbox[2] + padding_x, bbox[3] + padding_y)
         overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
         overlay_draw = ImageDraw.Draw(overlay)
-        overlay_draw.rounded_rectangle(rect, radius=18, fill=(0, 0, 0, 95))
+        overlay_draw.rounded_rectangle(rect, radius=20, fill=(0, 31, 95, 175))
         img = Image.alpha_composite(img, overlay)
         draw = ImageDraw.Draw(img)
-        draw.text((x + 2, y + 2), WATERMARK_TEXT, fill=(0, 0, 0, 140), font=font)
-        draw.text((x, y), WATERMARK_TEXT, fill=(255, 255, 255, 235), font=font)
-
-        output_path = image_path.replace(".png", "_watermark.png")
+        draw.text((x, y), text, fill=(255, 255, 255, 245), font=font)
+        output_path = os.path.splitext(image_path)[0] + "_watermark.png"
         img.save(output_path)
         return output_path
     except Exception as e:
         print("WATERMARK ERROR:", e, flush=True)
         return image_path
-
-
-def content_brief_text(data: dict) -> str:
-    return (
-        f"Компанія: {data.get('company', '')}\n"
-        f"Про компанію: {data.get('about', '')}\n"
-        f"Що просуваємо: {data.get('goal', '')}\n"
-        f"Місто: {data.get('city', '')}\n"
-        f"Адреса / локація: {data.get('address', '')}\n"
-        f"Основна інформація: {data.get('main_info', '')}\n"
-        f"Переваги / умови: {data.get('benefits', '')}\n"
-        f"Цільова аудиторія: {data.get('audience', '')}\n"
-        f"Тім у контенті: {data.get('tim', '')}\n"
-        f"Стиль: {data.get('style', '')}\n"
-        f"Музика: {data.get('music', '')}\n"
-        f"Терміново: {data.get('urgent', '')}\n"
-        f"Матеріали: {data.get('materials', '')}\n"
-        f"Контакти: {data.get('contacts', '')}\n"
-        f"Побажання: {data.get('wishes', '')}"
-    )
 
 
 async def generate_tim_image_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE, data: dict, client_comment: str = "", slide_number: int = None, story: str = ""):
@@ -2634,7 +2638,7 @@ async def generate_tim_image_from_text(update: Update, context: ContextTypes.DEF
 TIM IS REQUIRED BY DEFAULT:
 Tim is the default HireUA character and must be present in the banner unless the client explicitly asked to remove Tim or to use their own person/avatar/photo instead of Tim.
 Client product photos, store photos, logos, interiors, brand materials or goods do NOT cancel Tim. In those cases, combine the client material with Tim.
-Use the provided Tim reference image as the identity reference.
+Use the provided Tim reference image as the mandatory identity reference. Tim must have the same face, hair, eyes and recognizable character identity as the reference. Do not invent a new man.
 Tim must look like the same HireUA character from the Drive library, not a random man and not a different avatar.
 Keep Tim recognizable: black hair, blue eyes, friendly professional Ukrainian HR assistant, HireUA badge or branded element.
 Tim may wear clothing that fits the task, but keep the same face and character identity.
@@ -2687,7 +2691,7 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
         # If Tim is required, we must use a Tim reference from Drive.
         # Otherwise the model can invent a random man, which is not allowed.
         if use_tim:
-            ref_path = get_tim_reference_image_path(prefer_full_body=not bool(slide_number))
+            ref_path = get_tim_reference_image_path(prefer_full_body=False)
             if not ref_path or not os.path.exists(ref_path):
                 raise RuntimeError("TIM_REFERENCE_NOT_FOUND: add Tim images to Drive / Tim / Avatar_Main or Full Body")
             try:
@@ -2696,7 +2700,7 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
                         return openai_client.images.edit(
                             model=OPENAI_IMAGE_MODEL,
                             image=ref_img,
-                            prompt=prompt + "\nUse the provided image as the mandatory identity reference for Tim. Create a new premium banner composition with the same Tim character.",
+                            prompt=prompt + "\nUse the provided image as the mandatory identity reference for Tim. Keep the same face, hair, eyes and recognizable character identity. Create a new premium banner composition with this same Tim character, not a random man.",
                             size="1024x1536",
                             quality="high",
                         )
@@ -2705,7 +2709,7 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
                         return openai_client.images.edit(
                             model=OPENAI_IMAGE_MODEL,
                             image=[ref_img],
-                            prompt=prompt + "\nUse the provided image as the mandatory identity reference for Tim. Create a new premium banner composition with the same Tim character.",
+                            prompt=prompt + "\nUse the provided image as the mandatory identity reference for Tim. Keep the same face, hair, eyes and recognizable character identity. Create a new premium banner composition with this same Tim character, not a random man.",
                             size="1024x1536",
                             quality="high",
                         )
@@ -2784,7 +2788,7 @@ CLIENT EDIT REQUEST:
 
     def _edit_single_image():
         # If Tim is required, pass both the base/client image and a Tim reference.
-        ref_path = get_tim_reference_image_path(prefer_full_body=not bool(slide_number)) if use_tim else None
+        ref_path = get_tim_reference_image_path(prefer_full_body=False) if use_tim else None
         if use_tim and (not ref_path or not os.path.exists(ref_path)):
             raise RuntimeError("TIM_REFERENCE_NOT_FOUND: add Tim images to Drive / Tim / Avatar_Main or Full Body")
 
@@ -2795,7 +2799,7 @@ CLIENT EDIT REQUEST:
                         return openai_client.images.edit(
                             model=OPENAI_IMAGE_MODEL,
                             image=[img, ref_img],
-                            prompt=prompt + "\nUse the first image as the client/base material. Use the second image as the mandatory identity reference for Tim.",
+                            prompt=prompt + "\nUse the first image as the client/base material. Use the second image as the mandatory identity reference for Tim: same face, hair, eyes and character identity. Do not invent a random man.",
                             size="1024x1536",
                             quality="high",
                         )
