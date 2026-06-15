@@ -17,6 +17,7 @@ import json
 import base64
 import re
 from uuid import uuid4
+from pathlib import Path
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
