@@ -263,7 +263,7 @@ def save_user_to_sheet(update: Update, last_message: str = ""):
             except Exception:
                 old_count = 0
 
-            sheet.update(f"B{found_row}:I{found_row}", [[
+            sheet.update([[
                 now,
                 user_id,
                 user.username or "",
@@ -272,7 +272,7 @@ def save_user_to_sheet(update: Update, last_message: str = ""):
                 category,
                 old_count + 1,
                 last_message or "",
-            ]])
+            ]], range_name=f"B{found_row}:I{found_row}")
         else:
             sheet.append_row([
                 now,
@@ -1505,7 +1505,7 @@ def queue_sheet():
     try:
         first_row = sheet.row_values(1)
         if first_row[:len(QUEUE_HEADERS)] != QUEUE_HEADERS:
-            sheet.update(f"A1:{chr(64 + len(QUEUE_HEADERS))}1", [QUEUE_HEADERS])
+            sheet.update([QUEUE_HEADERS], range_name=f"A1:{chr(64 + len(QUEUE_HEADERS))}1")
     except Exception as e:
         print("QUEUE HEADER ERROR:", e, flush=True)
 
@@ -2694,27 +2694,35 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
             ref_path = get_tim_reference_image_path(prefer_full_body=False)
             if not ref_path or not os.path.exists(ref_path):
                 raise RuntimeError("TIM_REFERENCE_NOT_FOUND: add Tim images to Drive / Tim / Avatar_Main or Full Body")
-            try:
-                with open(ref_path, "rb") as ref_img:
-                    try:
-                        return openai_client.images.edit(
-                            model=OPENAI_IMAGE_MODEL,
-                            image=ref_img,
-                            prompt=prompt + "\nUse the provided image as the mandatory identity reference for Tim. Keep the same face, hair, eyes and recognizable character identity. Create a new premium banner composition with this same Tim character, not a random man.",
-                            size="1024x1536",
-                            quality="high",
-                        )
-                    except TypeError:
-                        ref_img.seek(0)
-                        return openai_client.images.edit(
-                            model=OPENAI_IMAGE_MODEL,
-                            image=[ref_img],
-                            prompt=prompt + "\nUse the provided image as the mandatory identity reference for Tim. Keep the same face, hair, eyes and recognizable character identity. Create a new premium banner composition with this same Tim character, not a random man.",
-                            size="1024x1536",
-                            quality="high",
-                        )
-            except Exception as e:
-                raise RuntimeError(f"TIM_REFERENCE_EDIT_FAILED: {e}")
+            edit_prompt = prompt + "\nUse the provided image as the mandatory identity reference for Tim. Keep the same face, hair, eyes and recognizable character identity. Create a new premium banner composition with this same Tim character, not a random man."
+            last_error = None
+
+            # Different OpenAI SDK/API versions accept slightly different image/edit parameters.
+            # Try the safe variants instead of stopping generation on a signature mismatch.
+            edit_variants = [
+                {"image_as_list": False, "with_quality": True},
+                {"image_as_list": True, "with_quality": True},
+                {"image_as_list": False, "with_quality": False},
+                {"image_as_list": True, "with_quality": False},
+            ]
+
+            for variant in edit_variants:
+                try:
+                    with open(ref_path, "rb") as ref_img:
+                        kwargs = {
+                            "model": OPENAI_IMAGE_MODEL,
+                            "image": [ref_img] if variant["image_as_list"] else ref_img,
+                            "prompt": edit_prompt,
+                            "size": "1024x1536",
+                        }
+                        if variant["with_quality"]:
+                            kwargs["quality"] = "high"
+                        return openai_client.images.edit(**kwargs)
+                except Exception as e:
+                    last_error = e
+                    print(f"TIM IMAGE EDIT VARIANT FAILED {variant}: {e}", flush=True)
+
+            raise RuntimeError(f"TIM_REFERENCE_EDIT_FAILED: {last_error}")
 
         return openai_client.images.generate(
             model=OPENAI_IMAGE_MODEL,
@@ -2787,51 +2795,71 @@ CLIENT EDIT REQUEST:
 """
 
     def _edit_single_image():
-        # If Tim is required, pass both the base/client image and a Tim reference.
+        # If Tim is required, pass both the base/client image and a Tim reference when API supports it.
         ref_path = get_tim_reference_image_path(prefer_full_body=False) if use_tim else None
         if use_tim and (not ref_path or not os.path.exists(ref_path)):
             raise RuntimeError("TIM_REFERENCE_NOT_FOUND: add Tim images to Drive / Tim / Avatar_Main or Full Body")
 
-        with open(base_image_path, "rb") as img:
-            if use_tim and ref_path:
-                with open(ref_path, "rb") as ref_img:
-                    try:
-                        return openai_client.images.edit(
-                            model=OPENAI_IMAGE_MODEL,
-                            image=[img, ref_img],
-                            prompt=prompt + "\nUse the first image as the client/base material. Use the second image as the mandatory identity reference for Tim: same face, hair, eyes and character identity. Do not invent a random man.",
-                            size="1024x1536",
-                            quality="high",
-                        )
-                    except TypeError:
-                        # Older SDK fallback: edit only the base image but keep strict text instruction.
-                        img.seek(0)
-                        return openai_client.images.edit(
-                            model=OPENAI_IMAGE_MODEL,
-                            image=img,
-                            prompt=prompt + "\nTim must match the official Tim HireUA character from TIM_PROFILE. Do not invent a random person.",
-                            size="1024x1536",
-                            quality="high",
-                        )
+        last_error = None
 
-            # No Tim: edit only the provided client/base image.
+        if use_tim and ref_path:
+            edit_prompt = prompt + "\nUse the first image as the client/base material. Use the second image as the mandatory identity reference for Tim: same face, hair, eyes and character identity. Do not invent a random man."
+            variants = [
+                {"multi": True, "list_single": False, "with_quality": True},
+                {"multi": True, "list_single": False, "with_quality": False},
+                {"multi": False, "list_single": False, "with_quality": True},
+                {"multi": False, "list_single": True, "with_quality": True},
+                {"multi": False, "list_single": False, "with_quality": False},
+                {"multi": False, "list_single": True, "with_quality": False},
+            ]
+            for variant in variants:
+                try:
+                    if variant["multi"]:
+                        with open(base_image_path, "rb") as img, open(ref_path, "rb") as ref_img:
+                            kwargs = {"model": OPENAI_IMAGE_MODEL, "image": [img, ref_img], "prompt": edit_prompt, "size": "1024x1536"}
+                            if variant["with_quality"]:
+                                kwargs["quality"] = "high"
+                            return openai_client.images.edit(**kwargs)
+                    else:
+                        # Fallback for SDKs that do not support multiple images in edit.
+                        with open(base_image_path, "rb") as img:
+                            kwargs = {
+                                "model": OPENAI_IMAGE_MODEL,
+                                "image": [img] if variant["list_single"] else img,
+                                "prompt": prompt + "\nTim must match the official Tim HireUA character from TIM_PROFILE and Drive references. Do not invent a random person.",
+                                "size": "1024x1536",
+                            }
+                            if variant["with_quality"]:
+                                kwargs["quality"] = "high"
+                            return openai_client.images.edit(**kwargs)
+                except Exception as e:
+                    last_error = e
+                    print(f"TIM EDIT VARIANT FAILED {variant}: {e}", flush=True)
+            raise RuntimeError(f"TIM_REFERENCE_EDIT_FAILED: {last_error}")
+
+        # No Tim: edit only the provided client/base image.
+        variants = [
+            {"list_single": False, "with_quality": True},
+            {"list_single": True, "with_quality": True},
+            {"list_single": False, "with_quality": False},
+            {"list_single": True, "with_quality": False},
+        ]
+        for variant in variants:
             try:
-                return openai_client.images.edit(
-                    model=OPENAI_IMAGE_MODEL,
-                    image=img,
-                    prompt=prompt,
-                    size="1024x1536",
-                    quality="high",
-                )
-            except TypeError:
-                img.seek(0)
-                return openai_client.images.edit(
-                    model=OPENAI_IMAGE_MODEL,
-                    image=[img],
-                    prompt=prompt,
-                    size="1024x1536",
-                    quality="high",
-                )
+                with open(base_image_path, "rb") as img:
+                    kwargs = {
+                        "model": OPENAI_IMAGE_MODEL,
+                        "image": [img] if variant["list_single"] else img,
+                        "prompt": prompt,
+                        "size": "1024x1536",
+                    }
+                    if variant["with_quality"]:
+                        kwargs["quality"] = "high"
+                    return openai_client.images.edit(**kwargs)
+            except Exception as e:
+                last_error = e
+                print(f"IMAGE EDIT VARIANT FAILED {variant}: {e}", flush=True)
+        raise RuntimeError(f"IMAGE_EDIT_FAILED: {last_error}")
 
     try:
         response = await asyncio.wait_for(
