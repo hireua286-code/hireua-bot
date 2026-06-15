@@ -2558,12 +2558,10 @@ WATERMARK_TEXT = "@UkraineHire"
 
 
 def add_watermark_to_image(image_path: str) -> str:
-    """Adds a guaranteed visible HireUA watermark to every generated image.
+    """Adds visible HireUA watermark to every generated image.
 
-    This function ALWAYS draws a visible top-left HireUA badge by code.
-    If Drive / Tim / Brand / watermark.png is found, it also places that PNG,
-    but it never relies only on the PNG because white transparent watermarks can
-    disappear on light images.
+    First tries PNG/JPG from Drive Tim/Brand. If not found or bad, adds a strong
+    text fallback. Never returns an unwatermarked image unless Pillow is missing.
     """
     if Image is None or ImageDraw is None:
         return image_path
@@ -2572,35 +2570,28 @@ def add_watermark_to_image(image_path: str) -> str:
         img = Image.open(image_path).convert("RGBA")
         width, height = img.size
 
-        # 1) Optional Drive PNG watermark, placed in bottom-right as a soft brand stamp.
         watermark_path = get_brand_watermark_path()
         if watermark_path and os.path.exists(watermark_path):
             try:
                 wm = Image.open(watermark_path).convert("RGBA")
-                target_w = max(220, int(width * 0.24))
+                target_w = max(190, int(width * 0.22))
                 scale = target_w / max(1, wm.size[0])
                 target_h = max(1, int(wm.size[1] * scale))
                 wm = wm.resize((target_w, target_h), Image.LANCZOS)
-                alpha = wm.getchannel("A").point(lambda a: int(a * 0.55))
+                alpha = wm.getchannel("A").point(lambda a: int(a * 0.82))
                 wm.putalpha(alpha)
-                x = width - target_w - int(width * 0.035)
-                y = height - target_h - int(height * 0.035)
+                x = int(width * 0.035)
+                y = int(height * 0.025)
                 img.alpha_composite(wm, (x, y))
                 print(f"WATERMARK PNG APPLIED: {watermark_path}", flush=True)
             except Exception as e:
                 print("PNG WATERMARK APPLY ERROR:", e, flush=True)
-        else:
-            print("WATERMARK PNG NOT FOUND - USING CODE BADGE", flush=True)
 
-        # 2) Mandatory visible code watermark. This guarantees no image leaves unbranded.
+        # Strong visible HireUA mark. It is added even when PNG exists so the banner never leaves unbranded.
         draw = ImageDraw.Draw(img)
         font_size = max(34, int(width * 0.045))
         font = None
-        for font_path in (
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-            "arial.ttf",
-        ):
+        for font_path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arial.ttf"):
             try:
                 font = ImageFont.truetype(font_path, font_size)
                 break
@@ -2609,32 +2600,26 @@ def add_watermark_to_image(image_path: str) -> str:
         if font is None:
             font = ImageFont.load_default()
 
-        text = "HireUA"
+        text = WATERMARK_TEXT
         x = int(width * 0.035)
         y = int(height * 0.025)
-        pad_x = max(18, int(width * 0.018))
-        pad_y = max(12, int(width * 0.012))
+        padding_x = max(18, int(width * 0.018))
+        padding_y = max(12, int(width * 0.012))
         bbox = draw.textbbox((x, y), text, font=font)
-        rect = (bbox[0] - pad_x, bbox[1] - pad_y, bbox[2] + pad_x, bbox[3] + pad_y)
-
+        rect = (bbox[0] - padding_x, bbox[1] - padding_y, bbox[2] + padding_x, bbox[3] + padding_y)
         overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
-        od = ImageDraw.Draw(overlay)
-        od.rounded_rectangle(rect, radius=max(16, int(width * 0.018)), fill=(0, 28, 85, 185))
+        overlay_draw = ImageDraw.Draw(overlay)
+        overlay_draw.rounded_rectangle(rect, radius=20, fill=(0, 31, 95, 175))
         img = Image.alpha_composite(img, overlay)
         draw = ImageDraw.Draw(img)
-
-        # dark outline + white text for readability on any background
-        for dx, dy in ((-2,0),(2,0),(0,-2),(0,2),(-1,-1),(1,1)):
-            draw.text((x+dx, y+dy), text, font=font, fill=(0, 0, 0, 160))
-        draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
-
+        draw.text((x, y), text, fill=(255, 255, 255, 245), font=font)
         output_path = os.path.splitext(image_path)[0] + "_watermark.png"
         img.save(output_path)
-        print(f"WATERMARK FINAL SAVED: {output_path}", flush=True)
         return output_path
     except Exception as e:
         print("WATERMARK ERROR:", e, flush=True)
         return image_path
+
 
 
 
@@ -2649,6 +2634,213 @@ def content_brief_text(data):
             value=", ".join(str(v) for v in value)
         lines.append(f"{key}: {value}")
     return "\n".join(lines)
+
+
+def _first_nonempty(*values):
+    for v in values:
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s.lower() not in ("none", "null", "-"):
+            return s
+    return ""
+
+
+def _extract_salary_from_text(text: str) -> str:
+    text = text or ""
+    m = re.search(r"(\d[\d\s]{2,})(?:\s*(?:грн|грив|uah|₴))?", text, re.I)
+    if not m:
+        return ""
+    digits = re.sub(r"\D", "", m.group(1))
+    if not digits:
+        return ""
+    try:
+        return f"{int(digits):,}".replace(",", " ") + " грн"
+    except Exception:
+        return m.group(1).strip() + " грн"
+
+
+def _banner_field_values(data: dict, client_comment: str = "") -> dict:
+    data = data or {}
+    comment = client_comment or ""
+    position = _first_nonempty(data.get("position"), data.get("vacancy"), data.get("title"), data.get("service"))
+    if not position:
+        # Very small fallback for common free-text requests.
+        m = re.search(r"(?:потрібен|нужен|вакансія|вакансия)\s+([^,\.\n]+)", comment, re.I)
+        if m:
+            position = m.group(1).strip()
+    salary = _first_nonempty(data.get("salary"), data.get("price"), data.get("payment")) or _extract_salary_from_text(comment)
+    if salary and "гр" not in salary.lower() and re.search(r"\d", salary):
+        salary = salary.strip() + " грн"
+    city = _first_nonempty(data.get("city"), data.get("location"))
+    if not city:
+        m = re.search(r"(?:город|місто|м\.|місце)\s*[:\-]?\s*([А-Яа-яЇїІіЄєҐґA-Za-z\- ]{3,})", comment, re.I)
+        if m:
+            city = m.group(1).strip()
+    benefits = _first_nonempty(data.get("benefits"), data.get("offer"), data.get("conditions"))
+    if not benefits and re.search(r"житл|жиль", comment, re.I):
+        benefits = "Надаємо житло"
+    contacts = _first_nonempty(data.get("contacts"), data.get("phone"), data.get("contact"))
+    return {
+        "position": position or "Співробітник",
+        "salary": salary or "",
+        "city": city or "",
+        "benefits": benefits or "",
+        "contacts": contacts or "",
+    }
+
+
+def _load_font(size: int, bold: bool = True):
+    if ImageFont is None:
+        return None
+    paths = []
+    if bold:
+        paths += [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ]
+    paths += [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "arial.ttf",
+    ]
+    for fp in paths:
+        try:
+            return ImageFont.truetype(fp, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _draw_wrapped_text(draw, text, xy, font, fill, max_width, line_spacing=8):
+    text = str(text or "").strip()
+    if not text:
+        return xy[1]
+    words = text.split()
+    lines = []
+    line = ""
+    for word in words:
+        test = (line + " " + word).strip()
+        if draw.textbbox((0, 0), test, font=font)[2] <= max_width or not line:
+            line = test
+        else:
+            lines.append(line)
+            line = word
+    if line:
+        lines.append(line)
+    x, y = xy
+    for ln in lines:
+        draw.text((x, y), ln, font=font, fill=fill)
+        bb = draw.textbbox((x, y), ln, font=font)
+        y += (bb[3] - bb[1]) + line_spacing
+    return y
+
+
+def _draw_rounded_box(draw, rect, fill, radius=24, outline=None, width=2):
+    try:
+        draw.rounded_rectangle(rect, radius=radius, fill=fill, outline=outline, width=width)
+    except Exception:
+        draw.rectangle(rect, fill=fill, outline=outline, width=width)
+
+
+def compose_layered_banner(image_path: str, data: dict = None, client_comment: str = "", use_tim: bool = True) -> str:
+    """Final deterministic banner assembly.
+
+    AI may draw the scene/character, but all critical commercial text and branding
+    are rendered here as layers, so salary/city/CTA cannot randomly change.
+    """
+    if Image is None or ImageDraw is None:
+        return add_watermark_to_image(image_path)
+    try:
+        img = Image.open(image_path).convert("RGBA")
+        w, h = img.size
+        fields = _banner_field_values(data or {}, client_comment)
+
+        # Dark transparent gradient from left for readability.
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        panel_w = int(w * 0.56)
+        for x in range(panel_w):
+            alpha = int(135 * (1 - x / max(1, panel_w)))
+            od.line([(x, 0), (x, h)], fill=(0, 25, 55, alpha))
+        img = Image.alpha_composite(img, overlay)
+        draw = ImageDraw.Draw(img)
+
+        margin = int(w * 0.055)
+        y = int(h * 0.075)
+
+        # Visible HireUA logo/badge as a layer.
+        logo_font = _load_font(max(42, int(w * 0.065)), True)
+        draw.text((margin, y), "Hire", font=logo_font, fill=(255, 255, 255, 255))
+        hire_w = draw.textbbox((margin, y), "Hire", font=logo_font)[2] - margin
+        draw.text((margin + hire_w, y), "UA", font=logo_font, fill=(0, 132, 255, 255))
+        y += int(h * 0.095)
+
+        # Vacancy pill.
+        pill_font = _load_font(max(34, int(w * 0.05)), True)
+        pill_text = "ВАКАНСІЯ"
+        pill_bb = draw.textbbox((0, 0), pill_text, font=pill_font)
+        pill_rect = (margin, y, margin + (pill_bb[2]-pill_bb[0]) + 52, y + (pill_bb[3]-pill_bb[1]) + 30)
+        _draw_rounded_box(draw, pill_rect, fill=(0, 84, 185, 238), radius=18)
+        draw.text((pill_rect[0] + 26, pill_rect[1] + 10), pill_text, font=pill_font, fill=(255, 255, 255, 255))
+        y = pill_rect[3] + int(h * 0.035)
+
+        # Position.
+        pos_font = _load_font(max(44, int(w * 0.06)), True)
+        pos = fields["position"].upper()
+        # Normalize common Russian words to UA ad style only for headings.
+        pos = pos.replace("ПРОДАВЕЦ АВТОМОБИЛЕЙ", "ПРОДАВЕЦЬ АВТОМОБІЛІВ")
+        y = _draw_wrapped_text(draw, pos, (margin, y), pos_font, (255, 255, 255, 255), int(w * 0.50), line_spacing=10)
+        y += int(h * 0.025)
+
+        # Salary box.
+        if fields["salary"]:
+            salary_rect = (margin, y, margin + int(w * 0.39), y + int(h * 0.115))
+            _draw_rounded_box(draw, salary_rect, fill=(247, 111, 0, 245), radius=20)
+            sal_font = _load_font(max(48, int(w * 0.072)), True)
+            sal_small = _load_font(max(28, int(w * 0.038)), True)
+            salary_value = fields["salary"].replace("гривень", "грн").replace("гривен", "грн")
+            m = re.match(r"([\d\s]+)\s*(.*)", salary_value)
+            if m:
+                draw.text((salary_rect[0] + 28, salary_rect[1] + 18), m.group(1).strip(), font=sal_font, fill=(255,255,255,255))
+                suffix = (m.group(2).strip() or "грн")
+                draw.text((salary_rect[0] + 34, salary_rect[1] + int(h * 0.072)), suffix + "/місяць", font=sal_small, fill=(255,255,255,255))
+            else:
+                draw.text((salary_rect[0] + 28, salary_rect[1] + 28), salary_value, font=sal_font, fill=(255,255,255,255))
+            y = salary_rect[3] + int(h * 0.035)
+
+        # Benefits/city/contacts panels.
+        info_font = _load_font(max(28, int(w * 0.035)), True)
+        small_font = _load_font(max(26, int(w * 0.032)), False)
+        box_w = int(w * 0.43)
+        def info_box(icon, text, y, orange=False):
+            if not text:
+                return y
+            rect_h = int(h * 0.07)
+            rect = (margin, y, margin + box_w, y + rect_h)
+            _draw_rounded_box(draw, rect, fill=(0, 45, 95, 232) if not orange else (247,111,0,245), radius=18)
+            draw.text((rect[0] + 20, rect[1] + 14), icon, font=info_font, fill=(255,255,255,255))
+            _draw_wrapped_text(draw, text, (rect[0] + 75, rect[1] + 16), small_font, (255,255,255,255), box_w - 95, line_spacing=2)
+            return rect[3] + int(h * 0.018)
+        y = info_box("⌂", fields["benefits"], y)
+        city = fields["city"]
+        if city and not city.lower().startswith(("м.", "г.")):
+            city = "м. " + city
+        y = info_box("⌖", city, y)
+        y = info_box("☎", fields["contacts"], y)
+
+        # CTA button at bottom left.
+        cta_font = _load_font(max(30, int(w * 0.04)), True)
+        cta_rect = (margin, h - int(h * 0.13), margin + int(w * 0.40), h - int(h * 0.06))
+        _draw_rounded_box(draw, cta_rect, fill=(247, 111, 0, 248), radius=18)
+        draw.text((cta_rect[0] + 28, cta_rect[1] + 20), "➤  ВІДГУКНУТИСЯ", font=cta_font, fill=(255,255,255,255))
+
+        layered_path = os.path.splitext(image_path)[0] + "_layered.png"
+        img.save(layered_path)
+        return add_watermark_to_image(layered_path)
+    except Exception as e:
+        print("LAYERED BANNER COMPOSE ERROR:", e, flush=True)
+        return add_watermark_to_image(image_path)
 
 async def generate_tim_image_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE, data: dict, client_comment: str = "", slide_number: int = None, story: str = ""):
     """Створює нове зображення з текстового опису. Тім додається за замовчуванням."""
@@ -2702,9 +2894,9 @@ CHARACTER RULES:
 Do not replace Tim with robots or generic mascots.
 
 TEXT RULES:
-Do not create a lot of text inside the image. If text appears, it must be minimal and clean.
-If salary, numbers, position, company name, phone, address or CTA are present in the client data, use them exactly as written. Do not invent or change numbers.
-Focus mainly on strong visual, composition and emotion.
+STRICTLY DO NOT render any readable text, letters, numbers, salary, city, phone, CTA buttons, logos or typography inside the AI image.
+Create only the background, scene, atmosphere and visual character. All text and branding will be added later by code as separate layers.
+Leave clean empty space on the left side for text layers.
 
 CLIENT / TASK DATA:
 {content_brief_text(data)}
@@ -2773,7 +2965,7 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
         with open(file_path, "wb") as f:
             f.write(image_bytes)
 
-        return add_watermark_to_image(file_path)
+        return compose_layered_banner(file_path, data=data, client_comment=client_comment, use_tim=use_tim)
     except Exception as e:
         print("TIM IMAGE GENERATION ERROR:", e, flush=True)
         msg = "⚠️ Не вдалося згенерувати зображення автоматично. Спробуйте ще раз трохи пізніше."
@@ -2797,14 +2989,13 @@ Edit the provided image according to the client's request.
 IMPORTANT:
 Preserve the main composition and identity of the original image unless the client asks to change it.
 Do not create a completely unrelated new image.
-When the client asks to change ONLY clothing, pose, color, background or style, DO NOT change salary, numbers, job title, offer text, company name, phone, address or CTA.
-All existing important text and numbers must remain exactly the same unless the client explicitly asks to change that exact text.
 Keep professional premium advertising quality.
 Keep vertical social media banner style.
 Improve design, lighting, colors and readability when useful.
-Avoid random robots, distorted faces, unreadable letters and messy text.
-If text must be changed, make it clean and minimal.
-Leave space in the upper-left corner for a HireUA watermark. A PNG watermark from Google Drive folder Tim/Brand will be added automatically after generation.
+Avoid random robots and distorted faces.
+STRICTLY DO NOT render or edit any readable text, salary, numbers, city, phone, CTA buttons, logos or typography inside the AI image.
+The final text layers will be drawn by code after generation, so preserve/adjust only the visual scene and character.
+Leave clean empty space on the left side for text layers and in the upper-left corner for branding.
 
 TIM RULE:
 Tim is the default HireUA character. If use_tim=True, keep Tim in the banner or add Tim using the provided Tim reference image.
@@ -2904,7 +3095,7 @@ CLIENT EDIT REQUEST:
         with open(file_path, "wb") as f:
             f.write(image_bytes)
 
-        return add_watermark_to_image(file_path)
+        return compose_layered_banner(file_path, data=data, client_comment=client_comment, use_tim=use_tim)
     except Exception as e:
         print("TIM IMAGE EDIT ERROR:", e, flush=True)
         if "TIM_REFERENCE" in str(e):
