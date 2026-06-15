@@ -973,6 +973,266 @@ def entry_platforms(entry: dict) -> list[str]:
     return entry.get("platforms") or selected_platforms(entry.get("session") or {})
 
 
+QUEUE_SHEET_NAME = "Queue"
+QUEUE_HEADERS = [
+    "ID", "Created", "Client", "Package", "Content", "Platforms", "Channels",
+    "PublishTime", "Status", "Notes", "TG", "FB", "IG", "YT",
+]
+QUEUE_ACTIVE_STATUSES = {"Scheduled", "Running", "Paused", "Error"}
+QUEUE_SKIP_STATUSES = {"Cancelled", "Canceled", "Paused", "Published", "Done"}
+
+
+def queue_sheet():
+    """Повертає вкладку Queue. Якщо вкладки немає — створює її з правильними заголовками."""
+    gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+    book = gc.open_by_key(GOOGLE_SHEET_ID)
+
+    try:
+        sheet = book.worksheet(QUEUE_SHEET_NAME)
+    except Exception:
+        sheet = book.add_worksheet(title=QUEUE_SHEET_NAME, rows=1000, cols=len(QUEUE_HEADERS) + 2)
+
+    try:
+        first_row = sheet.row_values(1)
+        if first_row[:len(QUEUE_HEADERS)] != QUEUE_HEADERS:
+            sheet.update("A1:N1", [QUEUE_HEADERS])
+    except Exception as e:
+        print("QUEUE HEADER ERROR:", e, flush=True)
+
+    return sheet
+
+
+def queue_status_from_entry_status(status: str) -> str:
+    status = (status or "pending").lower()
+    if status in ("pending",):
+        return "Scheduled"
+    if status in ("running",):
+        return "Running"
+    if status in ("done", "published"):
+        return "Published"
+    if status in ("done_with_errors", "failed", "error"):
+        return "Error"
+    if status in ("cancelled", "canceled"):
+        return "Cancelled"
+    if status == "paused":
+        return "Paused"
+    return status[:1].upper() + status[1:]
+
+
+def queue_platform_flag(value) -> bool:
+    """Порожня клітинка = ON, щоб старі/ручні рядки не ламалися."""
+    value = str(value or "").strip().upper()
+    if not value:
+        return True
+    return value not in ("OFF", "NO", "FALSE", "0", "НІ", "НЕТ")
+
+
+def queue_entry_platforms(row: dict) -> list[str]:
+    platforms = []
+    if queue_platform_flag(row.get("TG")):
+        platforms.append("telegram")
+    if queue_platform_flag(row.get("FB")):
+        platforms.append("facebook")
+    if queue_platform_flag(row.get("IG")):
+        platforms.append("instagram")
+    if queue_platform_flag(row.get("YT")):
+        platforms.append("youtube")
+    return platforms
+
+
+def format_queue_time(dt: datetime) -> str:
+    return dt.astimezone(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def parse_queue_time(value: str):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    for fmt in ("%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z"):
+        try:
+            dt = datetime.strptime(value, fmt)
+            if dt.tzinfo is None:
+                dt = KYIV_TZ.localize(dt)
+            return dt.astimezone(KYIV_TZ)
+        except Exception:
+            pass
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = KYIV_TZ.localize(dt)
+        return dt.astimezone(KYIV_TZ)
+    except Exception:
+        return None
+
+
+def queue_content_from_session(session: dict) -> str:
+    parts = []
+    if session.get("telegram", {}).get("banner") or session.get("facebook", {}).get("banner") or session.get("instagram", {}).get("banner"):
+        parts.append("Banner")
+    if session.get("telegram", {}).get("reels") or session.get("facebook", {}).get("reels") or session.get("instagram", {}).get("reels") or session.get("youtube", {}).get("reels"):
+        parts.append("Reels")
+    if session.get("telegram", {}).get("text") or session.get("facebook", {}).get("text"):
+        parts.append("Text")
+    return "+".join(parts) or "Publication"
+
+
+def queue_client_from_session(session: dict) -> str:
+    for key in ("client", "client_name", "company", "brand"):
+        if session.get(key):
+            return str(session.get(key)).strip()[:80]
+
+    text = str(session.get("text") or "").strip()
+    if text:
+        first_line = text.splitlines()[0].strip()
+        if first_line:
+            return first_line[:80]
+
+    return "Manual"
+
+
+def queue_channels_from_session(session: dict) -> str:
+    channels = session.get("channels") or []
+    names = []
+    for key in channels:
+        if key in CHANNELS:
+            names.append(CHANNELS[key][1].replace("@", ""))
+        else:
+            names.append(str(key))
+    return ",".join(names)
+
+
+def queue_platforms_string(platforms: list[str]) -> str:
+    mapping = {"telegram": "TG", "facebook": "FB", "instagram": "IG", "youtube": "YT"}
+    return ",".join(mapping.get(p, p) for p in platforms)
+
+
+def append_queue_entry(entry: dict):
+    """Записує одну заплановану публікацію у вкладку Queue."""
+    try:
+        sheet = queue_sheet()
+        session = entry.get("session") or {}
+        platforms = entry_platforms(entry)
+        run_at = None
+        try:
+            run_at = datetime.fromisoformat(entry.get("run_at"))
+        except Exception:
+            pass
+        if run_at is None:
+            run_at = datetime.now(KYIV_TZ)
+        if run_at.tzinfo is None:
+            run_at = KYIV_TZ.localize(run_at)
+        run_at = run_at.astimezone(KYIV_TZ)
+
+        sheet.append_row([
+            entry.get("id", ""),
+            datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M"),
+            queue_client_from_session(session),
+            entry.get("package", ""),
+            queue_content_from_session(session),
+            queue_platforms_string(platforms),
+            queue_channels_from_session(session),
+            format_queue_time(run_at),
+            "Scheduled",
+            "",
+            "ON" if "telegram" in platforms else "OFF",
+            "ON" if "facebook" in platforms else "OFF",
+            "ON" if "instagram" in platforms else "OFF",
+            "ON" if "youtube" in platforms else "OFF",
+        ], value_input_option="USER_ENTERED")
+    except Exception as e:
+        print("QUEUE APPEND ERROR:", e, flush=True)
+
+
+def get_queue_records():
+    try:
+        sheet = queue_sheet()
+        records = sheet.get_all_records()
+        rows = []
+        for idx, row in enumerate(records, start=2):
+            row["_row"] = idx
+            rows.append(row)
+        return rows
+    except Exception as e:
+        print("QUEUE READ ERROR:", e, flush=True)
+        return []
+
+
+def get_queue_record_by_id(entry_id: str):
+    entry_id = str(entry_id or "").strip()
+    if not entry_id:
+        return None
+    for row in get_queue_records():
+        if str(row.get("ID") or "").strip() == entry_id:
+            return row
+    return None
+
+
+def update_queue_entry(entry_id: str, status: str | None = None, notes: str | None = None):
+    try:
+        row = get_queue_record_by_id(entry_id)
+        if not row:
+            return False
+        sheet = queue_sheet()
+        row_num = row.get("_row")
+        if status is not None:
+            sheet.update_cell(row_num, 9, status)  # I = Status
+        if notes is not None:
+            sheet.update_cell(row_num, 10, notes[:45000])  # J = Notes
+        return True
+    except Exception as e:
+        print("QUEUE UPDATE ERROR:", e, flush=True)
+        return False
+
+
+def apply_queue_platform_switches_to_session(session: dict, row: dict) -> dict:
+    """Вимикає платформи у session, якщо в Queue стоїть OFF."""
+    session = deepcopy(session)
+    mapping = [
+        ("TG", "telegram"),
+        ("FB", "facebook"),
+        ("IG", "instagram"),
+        ("YT", "youtube"),
+    ]
+    for col, platform in mapping:
+        if not queue_platform_flag(row.get(col)) and platform in session:
+            for key in list(session[platform].keys()):
+                if isinstance(session[platform].get(key), bool):
+                    session[platform][key] = False
+    return session
+
+
+def queue_capacity_for_day(day_dt: datetime | None = None):
+    day_dt = (day_dt or datetime.now(KYIV_TZ)).astimezone(KYIV_TZ)
+    day_key = day_dt.strftime("%d.%m.%Y")
+
+    total_minutes = sum(
+        int((day_part_bounds(day_dt, part)[1] - day_part_bounds(day_dt, part)[0]).total_seconds() // 60)
+        for part in DAY_PARTS
+    )
+    result = {}
+    for platform, gap in PLATFORM_MIN_GAP_MINUTES.items():
+        total = max(1, total_minutes // gap)
+        if platform == "youtube":
+            total = min(total, YOUTUBE_DAILY_LIMIT)
+        result[platform] = {"total": total, "used": 0, "free": total}
+
+    rows = get_queue_records()
+    for row in rows:
+        status = str(row.get("Status") or "").strip()
+        if status != "Scheduled":
+            continue
+        publish_time = str(row.get("PublishTime") or "").strip()
+        if not publish_time.startswith(day_key):
+            continue
+        for platform in queue_entry_platforms(row):
+            if platform in result:
+                result[platform]["used"] += 1
+
+    for platform in result:
+        result[platform]["free"] = max(0, result[platform]["total"] - result[platform]["used"])
+    return result
+
+
 def is_active_schedule_entry(entry: dict) -> bool:
     return entry.get("status") in (None, "pending", "running") and bool(entry.get("slot"))
 
@@ -1171,6 +1431,7 @@ def add_schedule_entries(session: dict, slots, package_name: str):
         }
         entries.append(entry)
         new_entries.append(entry)
+        append_queue_entry(entry)
 
     save_schedule_entries(entries)
     return new_entries
@@ -1188,6 +1449,14 @@ def update_schedule_entry(entry_id: str, status: str, success=None, failed=None)
                 entry["success"] = success
             if failed is not None:
                 entry["failed"] = failed
+
+            queue_status = queue_status_from_entry_status(status)
+            notes_parts = []
+            if success:
+                notes_parts.append("Опубліковано: " + "; ".join(success))
+            if failed:
+                notes_parts.append("Помилки: " + "; ".join(failed))
+            update_queue_entry(entry_id, queue_status, " | ".join(notes_parts) if notes_parts else None)
             break
 
     save_schedule_entries(entries)
@@ -3103,6 +3372,21 @@ async def scheduled_publish(context: ContextTypes.DEFAULT_TYPE):
         return
 
     if entry_id:
+        queue_row = get_queue_record_by_id(entry_id)
+        if queue_row:
+            queue_status = str(queue_row.get("Status") or "").strip()
+            if queue_status in QUEUE_SKIP_STATUSES:
+                if ADMIN_ID:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=ADMIN_ID,
+                            text=f"⏸ Запланована публікація пропущена\nID: {entry_id}\nStatus: {queue_status}",
+                        )
+                    except Exception:
+                        pass
+                return
+            session = apply_queue_platform_switches_to_session(session, queue_row)
+
         update_schedule_entry(entry_id, "running")
 
     success, failed = await send_publication(context, session)
@@ -3131,7 +3415,7 @@ async def time_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if arg in ("tomorrow", "завтра"):
         day_dt += timedelta(days=1)
 
-    capacity = schedule_capacity_for_day(day_dt)
+    capacity = queue_capacity_for_day(day_dt)
     title_day = day_dt.strftime("%d.%m.%Y")
 
     names = {
@@ -3154,6 +3438,49 @@ async def time_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines.append("\nКоманди: /time — сьогодні, /time tomorrow — завтра")
     await update.message.reply_text("\n".join(lines))
+
+async def queue_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not admin_only(update):
+        return
+
+    rows = get_queue_records()
+    active = []
+    for row in rows:
+        status = str(row.get("Status") or "").strip()
+        if status in ("Scheduled", "Paused", "Error", "Running"):
+            active.append(row)
+
+    def sort_key(row):
+        dt = parse_queue_time(row.get("PublishTime"))
+        return dt or datetime.max.replace(tzinfo=KYIV_TZ)
+
+    active.sort(key=sort_key)
+
+    if not active:
+        await update.message.reply_text("📋 Черга порожня. Активних публікацій немає.")
+        return
+
+    lines = ["📋 Черга публікацій\n"]
+    for row in active[:30]:
+        flags = []
+        for col in ("TG", "FB", "IG", "YT"):
+            flags.append(f"{col}:{'ON' if queue_platform_flag(row.get(col)) else 'OFF'}")
+        lines.append(
+            f"#{row.get('ID')} — {row.get('Client') or 'Без клієнта'}\n"
+            f"{row.get('Package')} | {row.get('Content')}\n"
+            f"Час: {row.get('PublishTime')}\n"
+            f"Канали: {row.get('Channels')}\n"
+            f"Статус: {row.get('Status')}\n"
+            f"Платформи: {' '.join(flags)}\n"
+        )
+
+    if len(active) > 30:
+        lines.append(f"... ще {len(active) - 30} активних рядків")
+
+    lines.append("\nЩоб скасувати: у таблиці Queue постав Status = Cancelled.")
+    lines.append("Щоб вимкнути платформу: TG/FB/IG/YT = OFF.")
+    await update.message.reply_text("\n".join(lines))
+
 
 async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin_only(update):
@@ -3196,6 +3523,7 @@ async def run_bot():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("time", time_slots))
+    app.add_handler(CommandHandler("queue", queue_status))
 
     # Команды клиентских анкет. Тім показывает эти же команды кнопками после GPT-ответа.
     app.add_handler(CommandHandler("Free", start_free_vacancy_form))
