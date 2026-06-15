@@ -991,7 +991,15 @@ def slots_for_day_part(day_dt: datetime, part: str):
     current = start
 
     while current < end:
-        slots.append(current)
+        # Живий час публікації: не 08:00 / 08:05 / 08:10,
+        # а 08:02 / 08:09 / 08:13 тощо.
+        # Так бот не ставить публікації на круглі хвилини.
+        jitter_minutes = random.randint(1, max(1, SLOT_STEP_MINUTES - 1))
+        candidate = current + timedelta(minutes=jitter_minutes)
+
+        if candidate < end:
+            slots.append(candidate)
+
         current += timedelta(minutes=SLOT_STEP_MINUTES)
 
     # Рандом всередині блоку: різні клієнти не отримують однаковий порядок слотів.
