@@ -15,6 +15,7 @@
 import os
 import json
 import base64
+import re
 from uuid import uuid4
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
@@ -45,7 +46,8 @@ from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from google.oauth2 import service_account
 from openai import OpenAI
 import gspread
 
@@ -77,6 +79,12 @@ YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 BASE_URL = os.getenv("BASE_URL", "https://hireua-bot.onrender.com")
 GOOGLE_SHEET_ID = "1-HxPVaoQmDgNONc5D9yfs1kKt0goDVv8bp1fC3HEpR4"
 GOOGLE_CREDENTIALS_FILE = "/etc/secrets/key_users_json"
+
+# Google Drive storage. Uses the same service account JSON as Google Sheets.
+GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID", "")
+GOOGLE_DRIVE_ROOT_FOLDER_NAME = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_NAME", "HireUa")
+GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 GRAPH_URL = "https://graph.facebook.com/v25.0"
 
@@ -973,10 +981,224 @@ def entry_platforms(entry: dict) -> list[str]:
     return entry.get("platforms") or selected_platforms(entry.get("session") or {})
 
 
+
+# === GOOGLE DRIVE STORAGE ===
+# Google Drive is used as long-term media memory for Tim/HireUA.
+# Sheets = clients/queue database. Drive = files: banners, reels, logos, archive.
+_drive_service_cache = None
+_drive_folder_cache = {}
+
+
+def sanitize_drive_name(name: str, fallback: str = "Manual") -> str:
+    name = str(name or "").strip()
+    if not name:
+        name = fallback
+    name = re.sub(r"[\\/:*?\"<>|]+", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name[:90] or fallback
+
+
+def drive_q(value: str) -> str:
+    return str(value or "").replace("'", "\\'")
+
+
+def get_drive_service():
+    global _drive_service_cache
+    if _drive_service_cache is not None:
+        return _drive_service_cache
+
+    creds = service_account.Credentials.from_service_account_file(
+        GOOGLE_CREDENTIALS_FILE,
+        scopes=GOOGLE_DRIVE_SCOPES,
+    )
+    _drive_service_cache = build("drive", "v3", credentials=creds, cache_discovery=False)
+    return _drive_service_cache
+
+
+def find_drive_folder_by_name(name: str, parent_id: str | None = None):
+    service = get_drive_service()
+    q = (
+        "mimeType = 'application/vnd.google-apps.folder' "
+        f"and name = '{drive_q(name)}' and trashed = false"
+    )
+    if parent_id:
+        q += f" and '{parent_id}' in parents"
+
+    res = service.files().list(
+        q=q,
+        spaces="drive",
+        fields="files(id,name)",
+        pageSize=10,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
+    files = res.get("files") or []
+    return files[0] if files else None
+
+
+def get_drive_root_folder_id():
+    if GOOGLE_DRIVE_ROOT_FOLDER_ID:
+        return GOOGLE_DRIVE_ROOT_FOLDER_ID
+
+    cache_key = "root"
+    if cache_key in _drive_folder_cache:
+        return _drive_folder_cache[cache_key]
+
+    folder = find_drive_folder_by_name(GOOGLE_DRIVE_ROOT_FOLDER_NAME)
+    if not folder:
+        raise RuntimeError(
+            f"Google Drive folder '{GOOGLE_DRIVE_ROOT_FOLDER_NAME}' not found. "
+            "Share the folder with the service account or set GOOGLE_DRIVE_ROOT_FOLDER_ID."
+        )
+
+    _drive_folder_cache[cache_key] = folder["id"]
+    return folder["id"]
+
+
+def find_or_create_drive_folder(name: str, parent_id: str):
+    name = sanitize_drive_name(name)
+    cache_key = f"{parent_id}:{name}"
+    if cache_key in _drive_folder_cache:
+        return _drive_folder_cache[cache_key]
+
+    existing = find_drive_folder_by_name(name, parent_id)
+    if existing:
+        _drive_folder_cache[cache_key] = existing["id"]
+        return existing["id"]
+
+    service = get_drive_service()
+    metadata = {
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_id],
+    }
+    created = service.files().create(
+        body=metadata,
+        fields="id,name",
+        supportsAllDrives=True,
+    ).execute()
+    _drive_folder_cache[cache_key] = created["id"]
+    return created["id"]
+
+
+def get_top_drive_folder_id(name: str):
+    root_id = get_drive_root_folder_id()
+    return find_or_create_drive_folder(name, root_id)
+
+
+def get_client_drive_folder_id(client_name: str):
+    clients_root = get_top_drive_folder_id("Clients")
+    return find_or_create_drive_folder(sanitize_drive_name(client_name), clients_root)
+
+
+def get_client_drive_subfolder_id(client_name: str, subfolder_name: str):
+    client_folder = get_client_drive_folder_id(client_name)
+    return find_or_create_drive_folder(subfolder_name, client_folder)
+
+
+def find_drive_file_by_name(name: str, folder_id: str):
+    service = get_drive_service()
+    q = f"name = '{drive_q(name)}' and '{folder_id}' in parents and trashed = false"
+    res = service.files().list(
+        q=q,
+        spaces="drive",
+        fields="files(id,name,webViewLink,webContentLink,md5Checksum,mimeType)",
+        pageSize=5,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
+    files = res.get("files") or []
+    return files[0] if files else None
+
+
+def upload_file_to_drive(local_path: str, folder_id: str, filename: str, mime_type: str = "application/octet-stream"):
+    """Upload once: if a file with same generated name exists in the folder, reuse it."""
+    service = get_drive_service()
+    filename = sanitize_drive_name(filename, fallback=f"file_{uuid4().hex}")
+
+    existing = find_drive_file_by_name(filename, folder_id)
+    if existing:
+        return existing
+
+    media = MediaFileUpload(local_path, mimetype=mime_type, resumable=False)
+    metadata = {"name": filename, "parents": [folder_id]}
+    created = service.files().create(
+        body=metadata,
+        media_body=media,
+        fields="id,name,webViewLink,webContentLink,md5Checksum,mimeType",
+        supportsAllDrives=True,
+    ).execute()
+    return created
+
+
+def download_drive_file_to_temp(file_id: str, suffix: str = ""):
+    service = get_drive_service()
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    temp_file.close()
+    with open(temp_file.name, "wb") as fh:
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+    return temp_file.name
+
+
+async def prepare_session_drive_files(context: ContextTypes.DEFAULT_TYPE, session: dict):
+    """Save uploaded banner/reels to Google Drive once and keep Drive IDs in session."""
+    client_name = queue_client_from_session(session)
+
+    # Banner
+    if session.get("banner_file_id") and not session.get("banner_drive_id"):
+        temp_path = None
+        try:
+            temp_path = await download_telegram_photo_to_temp(context, session["banner_file_id"])
+            unique = session.get("banner_file_unique_id") or session.get("banner_file_id") or uuid4().hex
+            folder_id = get_client_drive_subfolder_id(client_name, "Banners")
+            file_name = f"banner_{sanitize_drive_name(client_name)}_{unique}.jpg"
+            uploaded = await asyncio.to_thread(upload_file_to_drive, temp_path, folder_id, file_name, "image/jpeg")
+            session["banner_drive_id"] = uploaded.get("id", "")
+            session["banner_drive_link"] = uploaded.get("webViewLink", "")
+            session["banner_drive_name"] = uploaded.get("name", file_name)
+        except Exception as e:
+            print("DRIVE BANNER UPLOAD ERROR:", e, flush=True)
+            session["banner_drive_error"] = str(e)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    # Reels / video
+    if session.get("reels_file_id") and not session.get("reels_drive_id"):
+        temp_path = None
+        try:
+            temp_path = await download_telegram_video_to_temp(context, session["reels_file_id"])
+            unique = session.get("reels_file_unique_id") or session.get("reels_file_id") or uuid4().hex
+            folder_id = get_client_drive_subfolder_id(client_name, "Reels")
+            file_name = f"reels_{sanitize_drive_name(client_name)}_{unique}.mp4"
+            uploaded = await asyncio.to_thread(upload_file_to_drive, temp_path, folder_id, file_name, "video/mp4")
+            session["reels_drive_id"] = uploaded.get("id", "")
+            session["reels_drive_link"] = uploaded.get("webViewLink", "")
+            session["reels_drive_name"] = uploaded.get("name", file_name)
+        except Exception as e:
+            print("DRIVE REELS UPLOAD ERROR:", e, flush=True)
+            session["reels_drive_error"] = str(e)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    return session
+
 QUEUE_SHEET_NAME = "Queue"
 QUEUE_HEADERS = [
     "ID", "Created", "Client", "Package", "Content", "Platforms", "Channels",
     "PublishTime", "Status", "Notes", "TG", "FB", "IG", "YT",
+    "BannerDriveID", "BannerDriveLink", "ReelsDriveID", "ReelsDriveLink",
 ]
 QUEUE_ACTIVE_STATUSES = {"Scheduled", "Running", "Paused", "Error"}
 QUEUE_SKIP_STATUSES = {"Cancelled", "Canceled", "Paused", "Published", "Done"}
@@ -995,7 +1217,7 @@ def queue_sheet():
     try:
         first_row = sheet.row_values(1)
         if first_row[:len(QUEUE_HEADERS)] != QUEUE_HEADERS:
-            sheet.update("A1:N1", [QUEUE_HEADERS])
+            sheet.update(f"A1:{chr(64 + len(QUEUE_HEADERS))}1", [QUEUE_HEADERS])
     except Exception as e:
         print("QUEUE HEADER ERROR:", e, flush=True)
 
@@ -1138,6 +1360,10 @@ def append_queue_entry(entry: dict):
             "ON" if "facebook" in platforms else "OFF",
             "ON" if "instagram" in platforms else "OFF",
             "ON" if "youtube" in platforms else "OFF",
+            session.get("banner_drive_id", ""),
+            session.get("banner_drive_link", ""),
+            session.get("reels_drive_id", ""),
+            session.get("reels_drive_link", ""),
         ], value_input_option="USER_ENTERED")
     except Exception as e:
         print("QUEUE APPEND ERROR:", e, flush=True)
@@ -1626,7 +1852,8 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if value == "single":
             session["days"] = 1
-            await query.edit_message_text("⏳ Публікую зараз...")
+            await query.edit_message_text("⏳ Зберігаю файли в Google Drive і публікую зараз...")
+            await prepare_session_drive_files(context, session)
             success, failed = await send_publication(context, session)
             await query.message.reply_text(make_result(success, failed))
             sessions.pop(user_id, None)
@@ -1742,7 +1969,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Надішліть саме фото / банер.")
             return
 
-        session["banner_file_id"] = update.message.photo[-1].file_id
+        banner_photo = update.message.photo[-1]
+        session["banner_file_id"] = banner_photo.file_id
+        session["banner_file_unique_id"] = getattr(banner_photo, "file_unique_id", "")
 
         if session["telegram"]["reels"] or session["facebook"]["reels"] or session["instagram"]["reels"] or session["youtube"]["reels"]:
             session["step"] = "wait_reels"
@@ -1760,7 +1989,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Надішліть саме відео / Reels.")
             return
 
-        session["reels_file_id"] = update.message.video.file_id
+        video = update.message.video
+        session["reels_file_id"] = video.file_id
+        session["reels_file_unique_id"] = getattr(video, "file_unique_id", "")
 
         if session["telegram"]["text"] or session["facebook"]["text"]:
             session["step"] = "wait_text"
@@ -3312,6 +3543,7 @@ def make_result(success, failed):
 
 async def schedule_posts(context, query, user_id, session):
     package_name, times = PACKAGES[session["package"]]
+    await prepare_session_drive_files(context, session)
     saved_session = deepcopy(session)
     days = int(session.get("days", 1))
 
