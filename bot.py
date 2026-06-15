@@ -1144,6 +1144,204 @@ def download_drive_file_to_temp(file_id: str, suffix: str = ""):
     return temp_file.name
 
 
+def export_google_doc_to_temp(file_id: str, mime_type: str = "text/plain", suffix: str = ".txt"):
+    service = get_drive_service()
+    request = service.files().export_media(fileId=file_id, mimeType=mime_type)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    temp_file.close()
+    with open(temp_file.name, "wb") as fh:
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+    return temp_file.name
+
+
+def get_nested_drive_folder_id(path_parts: list[str], create_missing: bool = False):
+    """Finds a folder by path inside HireUa. Optionally creates missing folders."""
+    parent_id = get_drive_root_folder_id()
+    for part in path_parts:
+        part = sanitize_drive_name(part)
+        found = find_drive_folder_by_name(part, parent_id)
+        if not found:
+            if not create_missing:
+                return None
+            parent_id = find_or_create_drive_folder(part, parent_id)
+        else:
+            parent_id = found["id"]
+    return parent_id
+
+
+def list_drive_files(folder_id: str, mime_prefix: str | None = None, name_contains: str | None = None, limit: int = 30):
+    service = get_drive_service()
+    q = f"'{folder_id}' in parents and trashed = false"
+    if mime_prefix:
+        q += f" and mimeType contains '{drive_q(mime_prefix)}'"
+    if name_contains:
+        q += f" and name contains '{drive_q(name_contains)}'"
+    res = service.files().list(
+        q=q,
+        spaces="drive",
+        fields="files(id,name,mimeType,webViewLink,webContentLink)",
+        pageSize=limit,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
+    return res.get("files") or []
+
+
+_tim_profile_cache = None
+_tim_assets_cache = {}
+
+
+def load_tim_profile_text() -> str:
+    """Reads TIM_PROFILE from Drive when possible. Falls back to a built-in profile."""
+    global _tim_profile_cache
+    if _tim_profile_cache is not None:
+        return _tim_profile_cache
+
+    fallback = (
+        "Тім — офіційний персонаж HireUA. Усі фото в папках Avatar_Main та Full Body належать персонажу Тім. "
+        "Тім використовується за замовчуванням у банерах, рекламі, вакансіях, Reels та відео HireUA. "
+        "Якщо клієнт не просить прибрати Тіма — використовувати Тіма. "
+        "Зовнішність: чорне волосся, сині очі, значок HireUA, дружній професійний стиль. "
+        "Одяг за замовчуванням: біла вишиванка, синя вишиванка, біла сорочка, синій піджак, біла футболка. "
+        "Тім може бути адаптований під бренд клієнта, але повинен залишатися впізнаваним."
+    )
+
+    try:
+        tim_folder_id = get_nested_drive_folder_id(["Tim"], create_missing=False)
+        if not tim_folder_id:
+            _tim_profile_cache = fallback
+            return _tim_profile_cache
+
+        files = list_drive_files(tim_folder_id, limit=50)
+        profile = None
+        for f in files:
+            name = (f.get("name") or "").lower()
+            if "tim_profile" in name or "тім" in name or "tim profile" in name:
+                profile = f
+                break
+
+        if not profile:
+            _tim_profile_cache = fallback
+            return _tim_profile_cache
+
+        mime = profile.get("mimeType") or ""
+        if mime == "application/vnd.google-apps.document":
+            path = export_google_doc_to_temp(profile["id"], "text/plain", ".txt")
+        else:
+            path = download_drive_file_to_temp(profile["id"], ".txt")
+
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="ignore").strip()
+        finally:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+        _tim_profile_cache = text or fallback
+        return _tim_profile_cache
+    except Exception as e:
+        print("TIM PROFILE LOAD ERROR:", e, flush=True)
+        _tim_profile_cache = fallback
+        return _tim_profile_cache
+
+
+def client_asked_without_tim(text: str, data: dict | None = None) -> bool:
+    combined = " ".join([
+        str(text or ""),
+        str((data or {}).get("tim", "")),
+        str((data or {}).get("wishes", "")),
+        str((data or {}).get("style", "")),
+    ]).lower()
+    negative_patterns = [
+        "без тіма", "без тима", "без tim", "без персонажа", "без героя", "без чоловіка", "без человека",
+        "прибрати тіма", "прибрати тима", "убрать тима", "убери тима", "не добавляй тима", "не додавай тіма",
+        "тільки товар", "только товар", "лише товар", "без людей", "без людей на фото", "без людини", "без человека",
+    ]
+    return any(p in combined for p in negative_patterns)
+
+
+def get_tim_reference_image_path(prefer_full_body: bool = True) -> str | None:
+    """Downloads one Tim reference image from Drive. Used to keep the same Tim character."""
+    cache_key = "full" if prefer_full_body else "avatar"
+    cached = _tim_assets_cache.get(cache_key)
+    if cached and os.path.exists(cached):
+        return cached
+
+    candidate_paths = []
+    if prefer_full_body:
+        candidate_paths = [["Tim", "Full Body"], ["Tim", "Full_Body"], ["Tim", "Avatar_Main"]]
+    else:
+        candidate_paths = [["Tim", "Avatar_Main"], ["Tim", "Full Body"], ["Tim", "Full_Body"]]
+
+    try:
+        candidates = []
+        for parts in candidate_paths:
+            folder_id = get_nested_drive_folder_id(parts, create_missing=False)
+            if not folder_id:
+                continue
+            files = list_drive_files(folder_id, mime_prefix="image/", limit=50)
+            for f in files:
+                name = (f.get("name") or "").lower()
+                if any(x in name for x in ("watermark", "logo", "json")):
+                    continue
+                candidates.append(f)
+
+        if not candidates:
+            return None
+
+        chosen = random.choice(candidates[:20])
+        ext = ".png" if "png" in (chosen.get("mimeType") or "") else ".jpg"
+        path = download_drive_file_to_temp(chosen["id"], ext)
+        _tim_assets_cache[cache_key] = path
+        return path
+    except Exception as e:
+        print("TIM REFERENCE LOAD ERROR:", e, flush=True)
+        return None
+
+
+def get_brand_watermark_path() -> str | None:
+    """Downloads watermark PNG from Tim/Brand or Brand. Fallback is old text watermark."""
+    cached = _tim_assets_cache.get("watermark")
+    if cached and os.path.exists(cached):
+        return cached
+
+    try:
+        folders = [["Tim", "Brand"], ["Brand"], ["Logos"]]
+        candidates = []
+        for parts in folders:
+            folder_id = get_nested_drive_folder_id(parts, create_missing=False)
+            if not folder_id:
+                continue
+            files = list_drive_files(folder_id, mime_prefix="image/", limit=50)
+            for f in files:
+                name = (f.get("name") or "").lower()
+                score = 0
+                if "watermark" in name or "вод" in name:
+                    score += 100
+                if "hireua" in name or "hire" in name:
+                    score += 20
+                if "transparent" in name or "проз" in name or "png" in name:
+                    score += 10
+                candidates.append((score, f))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        chosen = candidates[0][1]
+        ext = ".png" if "png" in (chosen.get("mimeType") or "") else ".jpg"
+        path = download_drive_file_to_temp(chosen["id"], ext)
+        _tim_assets_cache["watermark"] = path
+        return path
+    except Exception as e:
+        print("BRAND WATERMARK LOAD ERROR:", e, flush=True)
+        return None
+
+
 async def prepare_session_drive_files(context: ContextTypes.DEFAULT_TYPE, session: dict):
     """Save uploaded banner/reels to Google Drive once and keep Drive IDs in session."""
     client_name = queue_client_from_session(session)
@@ -2269,15 +2467,39 @@ WATERMARK_TEXT = "@UkraineHire"
 
 
 def add_watermark_to_image(image_path: str) -> str:
-    """Ставить водяний знак @UkraineHire на кожен банер."""
+    """Adds HireUA watermark from Google Drive Tim/Brand. Fallback: text @UkraineHire."""
     if Image is None or ImageDraw is None:
         return image_path
 
     try:
         img = Image.open(image_path).convert("RGBA")
-        draw = ImageDraw.Draw(img)
         width, height = img.size
 
+        watermark_path = get_brand_watermark_path()
+        if watermark_path and os.path.exists(watermark_path):
+            wm = Image.open(watermark_path).convert("RGBA")
+
+            # Keep watermark compact and readable: around 17-22% of banner width.
+            target_w = max(180, int(width * 0.20))
+            scale = target_w / max(1, wm.size[0])
+            target_h = max(1, int(wm.size[1] * scale))
+            wm = wm.resize((target_w, target_h), Image.LANCZOS)
+
+            # If watermark is an opaque logo on a background, make it semi-transparent.
+            alpha = wm.getchannel("A")
+            alpha = alpha.point(lambda a: int(a * 0.78))
+            wm.putalpha(alpha)
+
+            x = int(width * 0.035)
+            y = int(height * 0.025)
+            img.alpha_composite(wm, (x, y))
+
+            output_path = image_path.replace(".png", "_watermark.png")
+            img.save(output_path)
+            return output_path
+
+        # Fallback: old text watermark.
+        draw = ImageDraw.Draw(img)
         font_size = max(28, int(width * 0.04))
         font = None
         for font_path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arial.ttf"):
@@ -2332,11 +2554,33 @@ def content_brief_text(data: dict) -> str:
 
 
 async def generate_tim_image_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE, data: dict, client_comment: str = "", slide_number: int = None, story: str = ""):
-    """Створює нове зображення з текстового опису."""
+    """Створює нове зображення з текстового опису. Тім додається за замовчуванням."""
+    data = data or {}
     if slide_number:
         task = f"Create slide/banner #{slide_number} of 5 for a Reels/Shorts storyboard. Keep the same visual style and story continuity across all slides."
     else:
         task = "Create one premium vertical advertising banner."
+
+    use_tim = not client_asked_without_tim(client_comment, data)
+    tim_profile = load_tim_profile_text()
+    tim_instruction = ""
+    if use_tim:
+        tim_instruction = f"""
+TIM IS REQUIRED BY DEFAULT:
+Add Tim, the official HireUA character, to this banner unless it would physically block the client's product or key offer.
+Use the provided Tim reference image as the identity reference when available.
+Tim must look like the same HireUA character from the Drive library, not a random man.
+Keep Tim recognizable: black hair, blue eyes, friendly professional Ukrainian HR assistant, HireUA badge or branded element.
+Tim may wear clothing that fits the task, but keep the same face and character identity.
+
+TIM_PROFILE FROM DRIVE:
+{tim_profile}
+"""
+    else:
+        tim_instruction = """
+CLIENT REQUESTED NO TIM:
+Do not add Tim or any human mascot. Focus on product/service/client brand. Still keep HireUA premium style and watermark.
+"""
 
     prompt = f"""
 {task}
@@ -2348,7 +2592,7 @@ Avoid cheap template graphics, random robots, generic AI mascots, distorted face
 
 FORMAT:
 Vertical 1080x1920 social media banner / Reels cover.
-Leave clean empty space for a watermark in the upper-left corner. The watermark @UkraineHire will be added automatically after generation.
+Leave clean empty space for a HireUA watermark in the upper-left corner. A PNG watermark from Google Drive folder Tim/Brand will be added automatically after generation.
 
 BRAND CONTEXT:
 HireUA is a modern Ukrainian recruitment and promotion platform. The visual should feel trustworthy, professional, energetic and premium.
@@ -2356,8 +2600,7 @@ Use green/blue/white corporate mood when appropriate, but adapt to the client's 
 Do not make HireUA dominate the client's offer.
 
 CHARACTER RULES:
-Use Tim only if it helps the task or the client clearly asked for Tim.
-Tim = young Ukrainian HR assistant, white vyshyvanka, small HireUA badge, friendly professional appearance.
+{tim_instruction}
 Do not replace Tim with robots or generic mascots.
 
 TEXT RULES:
@@ -2374,15 +2617,44 @@ CLIENT REQUEST / APPROVED BRIEF / EDITS:
 {client_comment}
 """
 
+    def _generate_with_optional_tim_reference():
+        # If Tim is required, try image edit with a Tim reference from Drive.
+        # If OpenAI SDK/model rejects reference editing, fallback to normal text generation.
+        if use_tim:
+            ref_path = get_tim_reference_image_path(prefer_full_body=not bool(slide_number))
+            if ref_path and os.path.exists(ref_path):
+                try:
+                    with open(ref_path, "rb") as ref_img:
+                        try:
+                            return openai_client.images.edit(
+                                model=OPENAI_IMAGE_MODEL,
+                                image=ref_img,
+                                prompt=prompt + "\nUse the provided image only as a character reference for Tim. Create a new premium banner composition.",
+                                size="1024x1536",
+                                quality="high",
+                            )
+                        except TypeError:
+                            ref_img.seek(0)
+                            return openai_client.images.edit(
+                                model=OPENAI_IMAGE_MODEL,
+                                image=[ref_img],
+                                prompt=prompt + "\nUse the provided image only as a character reference for Tim. Create a new premium banner composition.",
+                                size="1024x1536",
+                                quality="high",
+                            )
+                except Exception as e:
+                    print("TIM REFERENCE IMAGE EDIT FALLBACK:", e, flush=True)
+
+        return openai_client.images.generate(
+            model=OPENAI_IMAGE_MODEL,
+            prompt=prompt,
+            size="1024x1536",
+            quality="high",
+        )
+
     try:
         response = await asyncio.wait_for(
-            asyncio.to_thread(
-                openai_client.images.generate,
-                model=OPENAI_IMAGE_MODEL,
-                prompt=prompt,
-                size="1024x1536",
-                quality="high",
-            ),
+            asyncio.to_thread(_generate_with_optional_tim_reference),
             timeout=IMAGE_GENERATION_TIMEOUT,
         )
 
@@ -2409,6 +2681,8 @@ async def edit_tim_image(update: Update, context: ContextTypes.DEFAULT_TYPE, bas
     if not base_image_path or not os.path.exists(base_image_path):
         return await generate_tim_image_from_text(update, context, data, client_comment=client_comment, slide_number=slide_number, story=story)
 
+    use_tim = not client_asked_without_tim(client_comment, data)
+    tim_profile = load_tim_profile_text()
     prompt = f"""
 Edit the provided image according to the client's request.
 
@@ -2420,7 +2694,15 @@ Keep vertical social media banner style.
 Improve design, lighting, colors and readability when useful.
 Avoid random robots, distorted faces, unreadable letters and messy text.
 If text must be changed, make it clean and minimal.
-Leave space in the upper-left corner for @UkraineHire watermark.
+Leave space in the upper-left corner for a HireUA watermark. A PNG watermark from Google Drive folder Tim/Brand will be added automatically after generation.
+
+TIM RULE:
+If the image contains Tim, preserve Tim's identity exactly: black hair, blue eyes, friendly HireUA HR assistant, recognizable HireUA badge/branded element.
+If client did not ask to remove Tim, keep Tim in the banner or add him if it fits the edit.
+If client explicitly asked to remove Tim, remove Tim and do not add any human mascot.
+
+TIM_PROFILE FROM DRIVE:
+{tim_profile if use_tim else "Client requested no Tim."}
 
 CLIENT / TASK DATA:
 {content_brief_text(data)}
