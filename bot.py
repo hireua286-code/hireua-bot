@@ -3765,33 +3765,83 @@ async def tim_ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+def is_general_chat_message(text: str) -> bool:
+    """Messages that must be answered as GPT-chat, not treated as banner edits."""
+    t = (text or "").lower().replace("ё", "е").strip()
+    if not t:
+        return False
+
+    general_markers = [
+        "привет", "привіт", "здравств", "добрый", "добрий", "hello", "hi",
+        "как заполнить", "як заповнити", "анкета", "анкету",
+        "как размест", "як розміст", "розмістити ваканс", "разместить ваканс",
+        "тариф", "цена", "ціна", "стоимость", "вартість",
+        "как работает", "як працює", "что делать", "що робити",
+        "резюме", "вакансия", "вакансія", "работу", "роботу",
+    ]
+    return any(m in t for m in general_markers)
+
+
+def is_clear_content_edit_message(text: str) -> bool:
+    """Only clear edit/approval/generation commands may continue active creative mode."""
+    t = (text or "").lower().replace("ё", "е").strip()
+    if not t:
+        return False
+
+    new_task_markers = [
+        "сделай рилс", "зроби рілс", "зроби reels", "сделай reels",
+        "сделай shorts", "зроби shorts", "новый банер", "новий банер",
+        "новая заявка", "нова заявка", "другая вакансия", "інша вакансія",
+    ]
+    if any(m in t for m in new_task_markers):
+        return False
+
+    edit_markers = [
+        "измени", "змени", "поменяй", "поміняй", "переделай", "перероби",
+        "исправь", "виправ", "убери", "прибери", "добавь", "додай",
+        "цвет", "колір", "фон", "текст", "шрифт", "зарплат", "місто", "город",
+        "логотип", "водяной", "водяний", "вышиванк", "вишиванк", "автомобиль",
+        "машин", "банер", "баннер", "генеруй", "генерируй", "роби", "створи",
+        "узгоджено", "согласовано",
+    ]
+    return any(m in t for m in edit_markers)
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.to_thread(save_user_to_sheet, update, update.message.text or "")
+    text = update.message.text or ""
+    await asyncio.to_thread(save_user_to_sheet, update, text)
 
-    # Если включен режим создания баннера/Reels, он имеет приоритет над всеми анкетами.
-    # Иначе старые незакрытые client_form могут начать задавать вопросы вакансии
-    # вместо того, чтобы Тім работал как обычный GPT-чат по контенту.
-    if await tim_content_ai_chat(update, context):
-        return
-
+    # 1) Active questionnaire always has priority. This keeps Google Sheets/forms working.
     if await client_form_text(update, context):
         return
 
-    if not admin_only(update):
-        await tim_ai_reply(update, context)
-        return
-
+    # 2) Admin publishing flow stays unchanged.
     user_id = update.effective_user.id
     session = sessions.get(user_id)
+    if admin_only(update) and session and session.get("step") == "wait_text":
+        session["text"] = text
+        session["step"] = "choose_package"
+        await update.message.reply_text("✅ Текст отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
+        return
 
-    if not session or session.get("step") != "wait_text":
+    # 3) If an old creative order is active, don't let it hijack normal questions.
+    active_order = context.user_data.get("tim_content_order")
+    if active_order:
+        if is_general_chat_message(text):
+            context.user_data.pop("tim_content_order", None)
+            await tim_ai_reply(update, context)
+            return
+
+        if is_clear_content_edit_message(text):
+            if await tim_content_ai_chat(update, context):
+                return
+
+        # Ambiguous/free text goes to GPT-chat, not to banner edit.
         await tim_ai_reply(update, context)
         return
 
-    session["text"] = update.message.text or ""
-    session["step"] = "choose_package"
-
-    await update.message.reply_text("✅ Текст отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
+    # 4) No active creative order: answer as normal GPT-chat.
+    await tim_ai_reply(update, context)
 
 
 async def telegram_file_url(context: ContextTypes.DEFAULT_TYPE, file_id: str):
