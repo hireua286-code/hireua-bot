@@ -93,6 +93,9 @@ GRAPH_URL = "https://graph.facebook.com/v25.0"
 TIM_PACKAGE_ACTIVATED_VIDEO = os.getenv("TIM_PACKAGE_ACTIVATED_VIDEO", "tim_package_activated.MP4")
 WELCOME_SENT_VALUE = "yes"
 PAID_WELCOME_CHECK_INTERVAL = int(os.getenv("PAID_WELCOME_CHECK_INTERVAL", "60"))
+# Увеличенный таймаут для отправки welcome-видео в Telegram.
+# На Render загрузка mp4 иногда занимает дольше стандартного лимита.
+PAID_WELCOME_VIDEO_TIMEOUT = int(os.getenv("PAID_WELCOME_VIDEO_TIMEOUT", "180"))
 
 PAID_PACKAGE_WELCOME_TEXT = """✅ Ваш пакет активовано.
 
@@ -485,6 +488,10 @@ async def check_paid_clients_welcome(context: ContextTypes.DEFAULT_TYPE):
                             chat_id=chat_id,
                             video=video_file,
                             supports_streaming=True,
+                            read_timeout=PAID_WELCOME_VIDEO_TIMEOUT,
+                            write_timeout=PAID_WELCOME_VIDEO_TIMEOUT,
+                            connect_timeout=PAID_WELCOME_VIDEO_TIMEOUT,
+                            pool_timeout=PAID_WELCOME_VIDEO_TIMEOUT,
                         )
                 else:
                     print("WELCOME VIDEO NOT FOUND: tim_package_activated.MP4", flush=True)
