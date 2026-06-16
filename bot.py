@@ -89,6 +89,35 @@ GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 GRAPH_URL = "https://graph.facebook.com/v25.0"
 
+# Видео и текст, которые клиент получает после оплаты Start/Business.
+TIM_PACKAGE_ACTIVATED_VIDEO = os.getenv("TIM_PACKAGE_ACTIVATED_VIDEO", "tim_package_activated.MP4")
+WELCOME_SENT_VALUE = "yes"
+PAID_WELCOME_CHECK_INTERVAL = int(os.getenv("PAID_WELCOME_CHECK_INTERVAL", "60"))
+
+PAID_PACKAGE_WELCOME_TEXT = """✅ Ваш пакет активовано.
+
+Для підготовки рекламних матеріалів надішліть менеджеру:
+
+📌 Що потрібно рекламувати:
+вакансію, товар, послугу, акцію, відкриття тощо.
+
+📌 Логотип компанії, якщо є.
+
+📌 Фото або відео матеріали, якщо є.
+
+📌 Основне повідомлення для клієнта.
+
+📌 Побажання щодо стилю, кольорів або приклади реклами, яка вам подобається.
+
+📌 Чи потрібна участь Тіма у відео:
+так / ні.
+
+👨‍💼 Надіслати матеріали менеджеру:
+
+@HireUkraine
+
+Після отримання матеріалів ми розпочнемо підготовку контенту."""
+
 CHANNELS = {
     "kyiv": ("Київ", "@HireKyiv"),
     "lviv": ("Львів", "@HireLviv"),
@@ -336,6 +365,7 @@ def append_client_to_sheet(data: dict, tariff: str = "", user=None):
             tariff,
             "pending",
             now,
+            "",  # welcome_sent
         ])
     except Exception as e:
         print("GOOGLE CLIENTS ERROR:", e, flush=True)
@@ -378,6 +408,103 @@ def user_has_paid_package(user) -> bool:
         print("GOOGLE CLIENTS ACCESS ERROR:", e, flush=True)
         return False
 
+
+
+
+def _clients_header_map(sheet):
+    """Повертає мапу назв колонок Clients -> номер колонки у Google Sheets."""
+    headers = sheet.row_values(1)
+    return {str(name).strip(): idx for idx, name in enumerate(headers, start=1) if str(name).strip()}
+
+
+def _ensure_clients_column(sheet, column_name: str) -> int:
+    """Знаходить колонку або додає її в кінець першого рядка."""
+    header_map = _clients_header_map(sheet)
+    if column_name in header_map:
+        return header_map[column_name]
+
+    next_col = len(sheet.row_values(1)) + 1
+    sheet.update_cell(1, next_col, column_name)
+    return next_col
+
+
+def _find_tim_package_video_path() -> Path | None:
+    """Шукає відео Тіма у корені проєкту. Підтримує .MP4 і .mp4."""
+    candidates = [
+        Path(TIM_PACKAGE_ACTIVATED_VIDEO),
+        Path("tim_package_activated.MP4"),
+        Path("tim_package_activated.mp4"),
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+async def check_paid_clients_welcome(context: ContextTypes.DEFAULT_TYPE):
+    """Надсилає відео + інструкцію клієнтам, у яких status=paid і welcome_sent ще не yes."""
+    try:
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("Clients")
+
+        welcome_col = _ensure_clients_column(sheet, "welcome_sent")
+        records = sheet.get_all_records()
+        video_path = _find_tim_package_video_path()
+
+        for row_num, row in enumerate(records, start=2):
+            telegram_id = str(
+                row.get("telegram_id")
+                or row.get("Telegram ID")
+                or row.get("telegram id")
+                or row.get("id")
+                or ""
+            ).strip()
+            status = str(
+                row.get("status")
+                or row.get("Status")
+                or row.get("Статус")
+                or ""
+            ).strip().lower()
+            welcome_sent = str(
+                row.get("welcome_sent")
+                or row.get("Welcome Sent")
+                or row.get("welcome send")
+                or ""
+            ).strip().lower()
+
+            if not telegram_id or status != "paid" or welcome_sent == WELCOME_SENT_VALUE:
+                continue
+
+            try:
+                chat_id = int(telegram_id)
+
+                # 1) Сначала видео Тіма
+                if video_path:
+                    with video_path.open("rb") as video_file:
+                        await context.bot.send_video(
+                            chat_id=chat_id,
+                            video=video_file,
+                            supports_streaming=True,
+                        )
+                else:
+                    print("WELCOME VIDEO NOT FOUND: tim_package_activated.MP4", flush=True)
+
+                # 2) Потом текст под видео
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=PAID_PACKAGE_WELCOME_TEXT,
+                    disable_web_page_preview=True,
+                )
+
+                # 3) Ставим yes, чтобы не отправлять повторно
+                sheet.update_cell(row_num, welcome_col, WELCOME_SENT_VALUE)
+                print(f"WELCOME SENT TO CLIENT {telegram_id}", flush=True)
+
+            except Exception as send_error:
+                print(f"WELCOME SEND ERROR row={row_num} telegram_id={telegram_id}: {send_error}", flush=True)
+
+    except Exception as e:
+        print("CHECK PAID CLIENTS WELCOME ERROR:", e, flush=True)
 
 def paid_required_keyboard():
     return InlineKeyboardMarkup([
@@ -4459,6 +4586,12 @@ async def run_bot():
 
     if app.job_queue:
         restore_pending_schedule_jobs(app.job_queue)
+        app.job_queue.run_repeating(
+            check_paid_clients_welcome,
+            interval=PAID_WELCOME_CHECK_INTERVAL,
+            first=15,
+            name="paid_clients_welcome",
+        )
 
     await app.updater.start_polling(drop_pending_updates=True)
 
