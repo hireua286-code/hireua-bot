@@ -1568,53 +1568,9 @@ def get_brand_watermark_path() -> str | None:
 
 
 async def prepare_session_drive_files(context: ContextTypes.DEFAULT_TYPE, session: dict):
-    """Save uploaded banner/reels to Google Drive once and keep Drive IDs in session."""
-    client_name = queue_client_from_session(session)
-
-    # Banner
-    if session.get("banner_file_id") and not session.get("banner_drive_id"):
-        temp_path = None
-        try:
-            temp_path = await download_telegram_photo_to_temp(context, session["banner_file_id"])
-            unique = session.get("banner_file_unique_id") or session.get("banner_file_id") or uuid4().hex
-            folder_id = get_client_drive_subfolder_id(client_name, "Banners")
-            file_name = f"banner_{sanitize_drive_name(client_name)}_{unique}.jpg"
-            uploaded = await asyncio.to_thread(upload_file_to_drive, temp_path, folder_id, file_name, "image/jpeg")
-            session["banner_drive_id"] = uploaded.get("id", "")
-            session["banner_drive_link"] = uploaded.get("webViewLink", "")
-            session["banner_drive_name"] = uploaded.get("name", file_name)
-        except Exception as e:
-            print("DRIVE BANNER UPLOAD ERROR:", e, flush=True)
-            session["banner_drive_error"] = str(e)
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
-
-    # Reels / video
-    if session.get("reels_file_id") and not session.get("reels_drive_id"):
-        temp_path = None
-        try:
-            temp_path = await download_telegram_video_to_temp(context, session["reels_file_id"])
-            unique = session.get("reels_file_unique_id") or session.get("reels_file_id") or uuid4().hex
-            folder_id = get_client_drive_subfolder_id(client_name, "Reels")
-            file_name = f"reels_{sanitize_drive_name(client_name)}_{unique}.mp4"
-            uploaded = await asyncio.to_thread(upload_file_to_drive, temp_path, folder_id, file_name, "video/mp4")
-            session["reels_drive_id"] = uploaded.get("id", "")
-            session["reels_drive_link"] = uploaded.get("webViewLink", "")
-            session["reels_drive_name"] = uploaded.get("name", file_name)
-        except Exception as e:
-            print("DRIVE REELS UPLOAD ERROR:", e, flush=True)
-            session["reels_drive_error"] = str(e)
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
-
+    """Google Drive upload for user banner/reels is disabled.
+    Media stays in Telegram/session and publishes directly without saving to Drive.
+    """
     return session
 
 QUEUE_SHEET_NAME = "Queue"
@@ -2275,7 +2231,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if value == "single":
             session["days"] = 1
-            await query.edit_message_text("⏳ Зберігаю файли в Google Drive і публікую зараз...")
+            await query.edit_message_text("⏳ Публікую зараз...")
             await prepare_session_drive_files(context, session)
             success, failed = await send_publication(context, session)
             await query.message.reply_text(make_result(success, failed))
