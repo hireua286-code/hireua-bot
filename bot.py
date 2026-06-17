@@ -4004,7 +4004,7 @@ def download_url_to_temp(video_url, suffix=".mp4"):
 
 def facebook_reels_start_upload():
     response = requests.post(
-        f"{GRAPH_URL}/{FB_PAGE_ID}/video_reels",
+        f"{GRAPH_URL}/me/video_reels",
         data={
             "upload_phase": "start",
             "access_token": PAGE_ACCESS_TOKEN,
@@ -4033,6 +4033,7 @@ def facebook_reels_upload_binary(upload_url, video_path):
         "Authorization": f"OAuth {PAGE_ACCESS_TOKEN}",
         "offset": "0",
         "file_size": str(file_size),
+        "Content-Type": "application/octet-stream",
     }
 
     with open(video_path, "rb") as fh:
@@ -4051,7 +4052,7 @@ def facebook_reels_upload_binary(upload_url, video_path):
 
 def facebook_reels_finish_upload(video_id, description):
     response = requests.post(
-        f"{GRAPH_URL}/{FB_PAGE_ID}/video_reels",
+        f"{GRAPH_URL}/me/video_reels",
         data={
             "upload_phase": "finish",
             "video_id": video_id,
