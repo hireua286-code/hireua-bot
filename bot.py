@@ -3955,19 +3955,45 @@ async def download_telegram_video_to_temp(context: ContextTypes.DEFAULT_TYPE, fi
     return temp_path
 
 
-def graph_post(endpoint, data):
-    data["access_token"] = PAGE_ACCESS_TOKEN
-    response = requests.post(f"{GRAPH_URL}/{endpoint}", data=data, timeout=120)
+def graph_get(endpoint, params=None):
+    params = dict(params or {})
+    params["access_token"] = PAGE_ACCESS_TOKEN
+    response = requests.get(f"{GRAPH_URL}/{endpoint}", params=params, timeout=60)
 
     try:
         payload = response.json()
     except Exception:
-        raise RuntimeError(f"Meta returned non-JSON response: {response.text}")
+        raise RuntimeError(f"GET {endpoint}: Meta returned non-JSON response: {response.text}")
 
     if response.status_code >= 400 or "error" in payload:
-        raise RuntimeError(payload)
+        raise RuntimeError(f"GET {endpoint}: {payload}")
 
     return payload
+
+
+def graph_post(endpoint, data):
+    payload_data = dict(data or {})
+    payload_data["access_token"] = PAGE_ACCESS_TOKEN
+    response = requests.post(f"{GRAPH_URL}/{endpoint}", data=payload_data, timeout=120)
+
+    try:
+        payload = response.json()
+    except Exception:
+        raise RuntimeError(f"POST {endpoint}: Meta returned non-JSON response: {response.text}")
+
+    if response.status_code >= 400 or "error" in payload:
+        raise RuntimeError(f"POST {endpoint}: {payload}")
+
+    return payload
+
+
+def facebook_token_debug():
+    try:
+        me = graph_get("me", {"fields": "id,name"})
+        page = graph_get(str(FB_PAGE_ID), {"fields": "id,name"}) if FB_PAGE_ID else {}
+        return f"token_me={me.get('id')}:{me.get('name')} page={page.get('id')}:{page.get('name')}"
+    except Exception as e:
+        return f"token_debug_error={e}"
 
 
 def publish_facebook_text(text):
@@ -4251,21 +4277,36 @@ async def send_publication(context: ContextTypes.DEFAULT_TYPE, session: dict):
                 failed.append(f"{chat}: {e}")
 
     if FB_PAGE_ID and PAGE_ACCESS_TOKEN:
-        try:
-            if session["facebook"]["banner"] and banner_url:
-                await asyncio.to_thread(publish_facebook_photo, banner_url, facebook_text if session["facebook"]["text"] else add_tim_footer("", "facebook"))
+        fb_debug = await asyncio.to_thread(facebook_token_debug)
+
+        if session["facebook"]["banner"] and banner_url:
+            try:
+                await asyncio.to_thread(
+                    publish_facebook_photo,
+                    banner_url,
+                    facebook_text if session["facebook"]["text"] else add_tim_footer("", "facebook"),
+                )
                 success.append("Facebook: банер")
+            except Exception as e:
+                failed.append(f"Facebook банер: {e} | {fb_debug}")
 
-            if session["facebook"]["reels"] and reels_url:
-                await asyncio.to_thread(publish_facebook_video, reels_url, facebook_text if session["facebook"]["text"] else add_tim_footer("", "facebook"))
+        if session["facebook"]["reels"] and reels_url:
+            try:
+                await asyncio.to_thread(
+                    publish_facebook_video,
+                    reels_url,
+                    facebook_text if session["facebook"]["text"] else add_tim_footer("", "facebook"),
+                )
                 success.append("Facebook: Reels/відео")
+            except Exception as e:
+                failed.append(f"Facebook відео: {e} | {fb_debug}")
 
-            if session["facebook"]["text"] and text and not session["facebook"]["banner"] and not session["facebook"]["reels"]:
+        if session["facebook"]["text"] and text and not session["facebook"]["banner"] and not session["facebook"]["reels"]:
+            try:
                 await asyncio.to_thread(publish_facebook_text, facebook_text)
                 success.append("Facebook: текст")
-
-        except Exception as e:
-            failed.append(f"Facebook: {e}")
+            except Exception as e:
+                failed.append(f"Facebook текст: {e} | {fb_debug}")
     elif session["facebook"]["banner"] or session["facebook"]["reels"] or session["facebook"]["text"]:
         failed.append("Facebook: немає FB_PAGE_ID або PAGE_ACCESS_TOKEN")
 
