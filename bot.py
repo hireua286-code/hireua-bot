@@ -3971,9 +3971,9 @@ def graph_get(endpoint, params=None):
     return payload
 
 
-def graph_post(endpoint, data):
+def graph_post(endpoint, data, access_token=None):
     payload_data = dict(data or {})
-    payload_data["access_token"] = PAGE_ACCESS_TOKEN
+    payload_data["access_token"] = access_token or PAGE_ACCESS_TOKEN
     response = requests.post(f"{GRAPH_URL}/{endpoint}", data=payload_data, timeout=120)
 
     try:
@@ -3987,11 +3987,48 @@ def graph_post(endpoint, data):
     return payload
 
 
+_FB_PAGE_ACCESS_TOKEN_CACHE = None
+
+
+def get_facebook_page_access_token():
+    """
+    PAGE_ACCESS_TOKEN may be a System User token. Facebook Page publishing,
+    especially video, often requires the Page access_token itself.
+    This derives the Page token from the System User token once and reuses it.
+    """
+    global _FB_PAGE_ACCESS_TOKEN_CACHE
+    if _FB_PAGE_ACCESS_TOKEN_CACHE:
+        return _FB_PAGE_ACCESS_TOKEN_CACHE
+
+    if not FB_PAGE_ID:
+        raise RuntimeError("FB_PAGE_ID is empty")
+
+    page_info = graph_get(str(FB_PAGE_ID), {"fields": "id,name,access_token"})
+    page_token = page_info.get("access_token")
+    if not page_token:
+        raise RuntimeError(f"Could not get Page access_token for FB_PAGE_ID={FB_PAGE_ID}: {page_info}")
+
+    _FB_PAGE_ACCESS_TOKEN_CACHE = page_token
+    return page_token
+
+
 def facebook_token_debug():
     try:
         me = graph_get("me", {"fields": "id,name"})
         page = graph_get(str(FB_PAGE_ID), {"fields": "id,name"}) if FB_PAGE_ID else {}
-        return f"token_me={me.get('id')}:{me.get('name')} page={page.get('id')}:{page.get('name')}"
+        debug = f"token_me={me.get('id')}:{me.get('name')} page={page.get('id')}:{page.get('name')}"
+        try:
+            page_token = get_facebook_page_access_token()
+            page_me_resp = requests.get(
+                f"{GRAPH_URL}/me",
+                params={"fields": "id,name", "access_token": page_token},
+                timeout=60,
+            )
+            page_me = page_me_resp.json()
+            debug += f" page_token_me={page_me.get('id')}:{page_me.get('name')}"
+        except Exception as page_token_error:
+            debug += f" page_token_error={page_token_error}"
+        return debug
     except Exception as e:
         return f"token_debug_error={e}"
 
@@ -3999,22 +4036,26 @@ def facebook_token_debug():
 def publish_facebook_text(text):
     if not text:
         return
-    return graph_post(f"{FB_PAGE_ID}/feed", {"message": text})
+    page_token = get_facebook_page_access_token()
+    return graph_post(f"{FB_PAGE_ID}/feed", {"message": text}, access_token=page_token)
 
 
 def publish_facebook_photo(image_url, caption):
-    return graph_post(f"{FB_PAGE_ID}/photos", {"url": image_url, "caption": caption or ""})
+    page_token = get_facebook_page_access_token()
+    return graph_post(f"{FB_PAGE_ID}/photos", {"url": image_url, "caption": caption or ""}, access_token=page_token)
 
 
 
 def publish_facebook_video(video_url, description):
-    """Rollback: publish Facebook video using the old Page /videos endpoint."""
+    """Publish Facebook video using the real Page access token, not the System User token."""
+    page_token = get_facebook_page_access_token()
     return graph_post(
         f"{FB_PAGE_ID}/videos",
         {
             "file_url": video_url,
             "description": description or "",
         },
+        access_token=page_token,
     )
 
 
