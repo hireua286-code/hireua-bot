@@ -4004,7 +4004,7 @@ def download_url_to_temp(video_url, suffix=".mp4"):
 
 def facebook_reels_start_upload():
     response = requests.post(
-        f"{GRAPH_URL}/me/video_reels",
+        f"{GRAPH_URL}/{FB_PAGE_ID}/video_reels",
         data={
             "upload_phase": "start",
             "access_token": PAGE_ACCESS_TOKEN,
@@ -4052,7 +4052,7 @@ def facebook_reels_upload_binary(upload_url, video_path):
 
 def facebook_reels_finish_upload(video_id, description):
     response = requests.post(
-        f"{GRAPH_URL}/me/video_reels",
+        f"{GRAPH_URL}/{FB_PAGE_ID}/video_reels",
         data={
             "upload_phase": "finish",
             "video_id": video_id,
@@ -4077,8 +4077,7 @@ def facebook_reels_finish_upload(video_id, description):
 def publish_facebook_video(video_url, description):
     """
     Publish Facebook Reels via the Page video_reels resumable upload flow.
-    The old /{page_id}/videos + file_url endpoint can return:
-    (#100) No permission to publish the video.
+    Uses /{FB_PAGE_ID}/video_reels because /me/video_reels fails with Page token on this setup.
     """
     video_path = None
 
