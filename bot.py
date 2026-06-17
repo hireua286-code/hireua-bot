@@ -3980,121 +3980,16 @@ def publish_facebook_photo(image_url, caption):
     return graph_post(f"{FB_PAGE_ID}/photos", {"url": image_url, "caption": caption or ""})
 
 
-def download_url_to_temp(video_url, suffix=".mp4"):
-    """Download a public Telegram/HTTP video URL to a temporary local file."""
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    temp_path = temp_file.name
-    temp_file.close()
-
-    try:
-        with requests.get(video_url, stream=True, timeout=180) as response:
-            response.raise_for_status()
-            with open(temp_path, "wb") as fh:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        fh.write(chunk)
-        return temp_path
-    except Exception:
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
-        raise
-
-
-def facebook_reels_start_upload():
-    response = requests.post(
-        f"{GRAPH_URL}/{FB_PAGE_ID}/video_reels",
-        data={
-            "upload_phase": "start",
-            "access_token": PAGE_ACCESS_TOKEN,
-        },
-        timeout=120,
-    )
-
-    try:
-        payload = response.json()
-    except Exception:
-        raise RuntimeError(f"Facebook Reels start returned non-JSON response: {response.text}")
-
-    if response.status_code >= 400 or "error" in payload:
-        raise RuntimeError(payload)
-
-    if not payload.get("video_id") or not payload.get("upload_url"):
-        raise RuntimeError({"message": "Facebook Reels start did not return video_id/upload_url", "response": payload})
-
-    return payload
-
-
-def facebook_reels_upload_binary(upload_url, video_path):
-    file_size = os.path.getsize(video_path)
-
-    headers = {
-        "Authorization": f"OAuth {PAGE_ACCESS_TOKEN}",
-        "offset": "0",
-        "file_size": str(file_size),
-        "Content-Type": "application/octet-stream",
-    }
-
-    with open(video_path, "rb") as fh:
-        response = requests.post(upload_url, headers=headers, data=fh, timeout=300)
-
-    try:
-        payload = response.json()
-    except Exception:
-        payload = {"raw_response": response.text}
-
-    if response.status_code >= 400 or (isinstance(payload, dict) and payload.get("error")):
-        raise RuntimeError(payload)
-
-    return payload
-
-
-def facebook_reels_finish_upload(video_id, description):
-    response = requests.post(
-        f"{GRAPH_URL}/{FB_PAGE_ID}/video_reels",
-        data={
-            "upload_phase": "finish",
-            "video_id": video_id,
-            "video_state": "PUBLISHED",
-            "description": description or "",
-            "access_token": PAGE_ACCESS_TOKEN,
-        },
-        timeout=120,
-    )
-
-    try:
-        payload = response.json()
-    except Exception:
-        raise RuntimeError(f"Facebook Reels finish returned non-JSON response: {response.text}")
-
-    if response.status_code >= 400 or "error" in payload:
-        raise RuntimeError(payload)
-
-    return payload
-
 
 def publish_facebook_video(video_url, description):
-    """
-    Publish Facebook Reels via the Page video_reels resumable upload flow.
-    Uses /{FB_PAGE_ID}/video_reels because /me/video_reels fails with Page token on this setup.
-    """
-    video_path = None
-
-    try:
-        video_path = download_url_to_temp(video_url, suffix=".mp4")
-        start = facebook_reels_start_upload()
-        video_id = start["video_id"]
-        upload_url = start["upload_url"]
-
-        facebook_reels_upload_binary(upload_url, video_path)
-        return facebook_reels_finish_upload(video_id, description)
-    finally:
-        if video_path:
-            try:
-                os.remove(video_path)
-            except Exception:
-                pass
+    """Rollback: publish Facebook video using the old Page /videos endpoint."""
+    return graph_post(
+        f"{FB_PAGE_ID}/videos",
+        {
+            "file_url": video_url,
+            "description": description or "",
+        },
+    )
 
 
 def get_instagram_media_status(creation_id):
