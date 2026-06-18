@@ -2005,8 +2005,11 @@ QUEUE_SKIP_STATUSES = {"Cancelled", "Canceled", "Paused", "Published", "Done"}
 
 SLOTVIEW_SHEET_NAME = "SlotView"
 SLOTVIEW_HEADERS = [
-    "Дата", "ID", "Компанія", "Час публікації", "TG", "FB", "IG", "YT", "Статус", "Звіт",
+    "Дата", "ID", "Компанія", "Пакет", "Час публікації",
+    "TG", "FB", "IG", "YT", "Статус", "Звіт", "SessionJSON",
 ]
+SLOTVIEW_ACTIVE_STATUSES = {"Scheduled", "Processing", "Running", "Error"}
+SLOTVIEW_FINAL_STATUSES = {"Done", "Partial", "Failed", "Cancelled", "Canceled", "Published"}
 
 
 def slotview_sheet():
@@ -2022,7 +2025,7 @@ def slotview_sheet():
     try:
         first_row = sheet.row_values(1)
         if first_row[:len(SLOTVIEW_HEADERS)] != SLOTVIEW_HEADERS:
-            sheet.update([SLOTVIEW_HEADERS], range_name="A1:J1")
+            sheet.update([SLOTVIEW_HEADERS], range_name="A1:L1")
     except Exception as e:
         print("SLOTVIEW HEADER ERROR:", e, flush=True)
 
@@ -2034,6 +2037,11 @@ def platform_mark_for_entry(platforms: list[str], platform: str, default: str = 
 
 
 def append_slotview_entry(entry: dict):
+    """Записує майбутню публікацію у SlotView.
+
+    SlotView = головне джерело розкладу: /time, /slots і відновлення після
+    деплою читають саме цей лист, а Queue лишається журналом/архівом.
+    """
     try:
         sheet = slotview_sheet()
         session = entry.get("session") or {}
@@ -2053,6 +2061,7 @@ def append_slotview_entry(entry: dict):
             run_at.strftime("%d.%m.%Y"),
             entry.get("id", ""),
             queue_client_from_session(session),
+            entry.get("package", ""),
             run_at.strftime("%H:%M"),
             platform_mark_for_entry(platforms, "telegram"),
             platform_mark_for_entry(platforms, "facebook"),
@@ -2060,10 +2069,10 @@ def append_slotview_entry(entry: dict):
             platform_mark_for_entry(platforms, "youtube"),
             "Scheduled",
             "-",
+            encode_session_json(session),
         ], value_input_option="USER_ENTERED")
     except Exception as e:
         print("SLOTVIEW APPEND ERROR:", e, flush=True)
-
 
 def get_slotview_records():
     try:
@@ -2125,15 +2134,14 @@ def update_slotview_entry(entry_id: str, status: str, success=None, failed=None,
         row_num = row.get("_row")
 
         marks = detect_platform_results(success, failed, platforms or [])
-        # E:H = TG/FB/IG/YT
-        sheet.update(f"E{row_num}:H{row_num}", [[marks["telegram"], marks["facebook"], marks["instagram"], marks["youtube"]]])
-        sheet.update_cell(row_num, 9, status)
-        sheet.update_cell(row_num, 10, datetime.now(KYIV_TZ).strftime("%H:%M"))
+        # F:I = TG/FB/IG/YT, J = Статус, K = Звіт
+        sheet.update(f"F{row_num}:I{row_num}", [[marks["telegram"], marks["facebook"], marks["instagram"], marks["youtube"]]])
+        sheet.update_cell(row_num, 10, status)
+        sheet.update_cell(row_num, 11, datetime.now(KYIV_TZ).strftime("%H:%M"))
         return True
     except Exception as e:
         print("SLOTVIEW UPDATE ERROR:", e, flush=True)
         return False
-
 
 def parse_slots_date(value: str | None):
     value = str(value or "").strip().lower()
@@ -2163,6 +2171,60 @@ def slotview_rows_for_day(day_dt: datetime):
     rows.sort(key=lambda r: str(r.get("Час публікації") or ""))
     return rows
 
+
+
+def parse_slotview_datetime(row: dict):
+    date_value = str(row.get("Дата") or "").strip()
+    time_value = str(row.get("Час публікації") or "").strip()
+    if not date_value or not time_value:
+        return None
+    for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%y %H:%M"):
+        try:
+            dt = datetime.strptime(f"{date_value} {time_value}", fmt)
+            return KYIV_TZ.localize(dt).astimezone(KYIV_TZ)
+        except Exception:
+            pass
+    return None
+
+
+def slotview_row_platforms(row: dict) -> list[str]:
+    platforms = []
+    if str(row.get("TG") or "").strip() != "➖":
+        platforms.append("telegram")
+    if str(row.get("FB") or "").strip() != "➖":
+        platforms.append("facebook")
+    if str(row.get("IG") or "").strip() != "➖":
+        platforms.append("instagram")
+    if str(row.get("YT") or "").strip() != "➖":
+        platforms.append("youtube")
+    return platforms
+
+
+def slotview_active_entries(include_past: bool = False) -> list[dict]:
+    """Активні задачі з SlotView. Саме вони займають майбутні слоти."""
+    now = datetime.now(KYIV_TZ)
+    entries = []
+    for row in get_slotview_records():
+        status = str(row.get("Статус") or "").strip()
+        if status not in SLOTVIEW_ACTIVE_STATUSES:
+            continue
+        run_at = parse_slotview_datetime(row)
+        if not run_at:
+            continue
+        if not include_past and run_at <= now:
+            continue
+        session = decode_session_json(row.get("SessionJSON")) or {}
+        entries.append({
+            "id": str(row.get("ID") or "").strip(),
+            "status": "pending",
+            "slot": slot_key(run_at),
+            "run_at": run_at.isoformat(),
+            "package": str(row.get("Пакет") or ""),
+            "platforms": slotview_row_platforms(row),
+            "session": session,
+            "_row": row.get("_row"),
+        })
+    return entries
 
 def queue_sheet():
     """Повертає вкладку Queue. Якщо вкладки немає — створює її з правильними заголовками."""
@@ -2409,7 +2471,7 @@ def apply_queue_platform_switches_to_session(session: dict, row: dict) -> dict:
     return session
 
 
-def queue_capacity_for_day(day_dt: datetime | None = None):
+def slotview_capacity_for_day(day_dt: datetime | None = None):
     day_dt = (day_dt or datetime.now(KYIV_TZ)).astimezone(KYIV_TZ)
     day_key = day_dt.strftime("%d.%m.%Y")
 
@@ -2420,12 +2482,14 @@ def queue_capacity_for_day(day_dt: datetime | None = None):
     total = max(1, total_minutes // GLOBAL_SLOT_GAP_MINUTES)
 
     used = 0
-    for row in get_queue_records():
-        status = str(row.get("Status") or "").strip()
-        if status not in ("Scheduled", "Running", "Error"):
+    for row in get_slotview_records():
+        status = str(row.get("Статус") or "").strip()
+        if status not in SLOTVIEW_ACTIVE_STATUSES:
             continue
-        publish_time = str(row.get("PublishTime") or "").strip()
-        if publish_time.startswith(day_key):
+        run_at = parse_slotview_datetime(row)
+        if not run_at:
+            continue
+        if run_at.strftime("%d.%m.%Y") == day_key:
             used += 1
 
     return {
@@ -2435,6 +2499,11 @@ def queue_capacity_for_day(day_dt: datetime | None = None):
             "free": max(0, total - used),
         }
     }
+
+
+def queue_capacity_for_day(day_dt: datetime | None = None):
+    # Backward-compatible name. Queue більше не впливає на зайнятість.
+    return slotview_capacity_for_day(day_dt)
 
 def is_active_schedule_entry(entry: dict) -> bool:
     return entry.get("status") in (None, "pending", "running") and bool(entry.get("slot"))
@@ -2510,7 +2579,9 @@ def youtube_day_count(entries: list[dict], day_dt: datetime) -> int:
 
 
 def find_free_slots_for_session(session: dict, start_from: datetime | None = None):
-    entries = load_schedule_entries()
+    # SlotView = головне джерело зайнятих майбутніх слотів.
+    # Старий Queue і локальний scheduled_posts.json більше не блокують новий графік.
+    entries = slotview_active_entries(include_past=False)
     platforms = selected_platforms(session)
     package_key = session.get("package", "single")
     days = int(session.get("days", 1))
@@ -2568,35 +2639,7 @@ def find_free_slots_for_session(session: dict, start_from: datetime | None = Non
 
 
 def schedule_capacity_for_day(day_dt: datetime | None = None):
-    day_dt = (day_dt or datetime.now(KYIV_TZ)).astimezone(KYIV_TZ)
-    entries = [entry for entry in load_schedule_entries() if is_active_schedule_entry(entry)]
-    day_key = slot_day_key(day_dt)
-
-    result = {}
-    total_minutes = sum(
-        int((day_part_bounds(day_dt, part)[1] - day_part_bounds(day_dt, part)[0]).total_seconds() // 60)
-        for part in DAY_PARTS
-    )
-
-    for platform, gap in PLATFORM_MIN_GAP_MINUTES.items():
-        total = max(1, total_minutes // gap)
-        if platform == "youtube":
-            total = min(total, YOUTUBE_DAILY_LIMIT)
-
-        used = 0
-        for entry in entries:
-            if not str(entry.get("slot", "")).startswith(day_key):
-                continue
-            if platform in entry_platforms(entry):
-                used += 1
-
-        result[platform] = {
-            "total": total,
-            "used": used,
-            "free": max(0, total - used),
-        }
-
-    return result
+    return slotview_capacity_for_day(day_dt)
 
 def add_schedule_entries(session: dict, slots, package_name: str):
     entries = load_schedule_entries()
@@ -2697,11 +2740,12 @@ def restore_pending_schedule_jobs(job_queue):
     return restored
 
 
-def restore_pending_schedule_jobs_from_queue(job_queue):
-    """Повне відновлення після деплою з Google Sheets Queue.
+def restore_pending_schedule_jobs_from_slotview(job_queue):
+    """Повне відновлення після деплою з SlotView.
 
-    Queue = головне джерело правди. Для кожного майбутнього рядка зі статусом
-    Scheduled / Running / Error бот бере SessionJSON і заново реєструє JobQueue.
+    SlotView = головне джерело правди. Для кожного майбутнього рядка зі статусом
+    Scheduled / Processing / Running / Error бот бере SessionJSON і заново реєструє JobQueue.
+    Queue лишається архівом і більше не відновлює/не блокує слоти.
     """
     now = datetime.now(KYIV_TZ)
     restored = 0
@@ -2711,28 +2755,27 @@ def restore_pending_schedule_jobs_from_queue(job_queue):
     entry_by_id = {str(e.get("id") or "").strip(): e for e in entries if e.get("id")}
     registered_ids = set()
 
-    for row in get_queue_records():
+    for row in get_slotview_records():
         entry_id = str(row.get("ID") or "").strip()
         if not entry_id or entry_id in registered_ids:
             continue
 
-        status = str(row.get("Status") or "").strip()
-        if status not in ("Scheduled", "Running", "Error"):
+        status = str(row.get("Статус") or "").strip()
+        if status not in SLOTVIEW_ACTIVE_STATUSES:
             continue
 
-        publish_time = parse_queue_time(row.get("PublishTime"))
+        publish_time = parse_slotview_datetime(row)
         if not publish_time or publish_time <= now:
             continue
 
-        local_entry = entry_by_id.get(entry_id) or {}
-        session = decode_session_json(row.get("SessionJSON")) or local_entry.get("session")
+        session = decode_session_json(row.get("SessionJSON"))
         if not session:
             skipped_no_session += 1
-            update_queue_entry(entry_id, "Error", "Не вдалося відновити після деплою: порожній SessionJSON")
+            update_slotview_entry(entry_id, "Failed", success=[], failed=["Порожній SessionJSON"], platforms=slotview_row_platforms(row))
             continue
 
-        platforms = queue_entry_platforms(row) or local_entry.get("platforms") or selected_platforms(session)
-        package_name = str(row.get("Package") or local_entry.get("package") or "")
+        platforms = slotview_row_platforms(row) or selected_platforms(session)
+        package_name = str(row.get("Пакет") or "")
 
         entry = {
             "id": entry_id,
@@ -2741,8 +2784,8 @@ def restore_pending_schedule_jobs_from_queue(job_queue):
             "run_at": publish_time.isoformat(),
             "package": package_name,
             "platforms": platforms,
-            "created_at": local_entry.get("created_at") or str(row.get("Created") or ""),
-            "restored_from_queue_at": now.isoformat(),
+            "created_at": entry_by_id.get(entry_id, {}).get("created_at") or now.isoformat(),
+            "restored_from_slotview_at": now.isoformat(),
             "session": deepcopy(session),
         }
 
@@ -2759,8 +2802,13 @@ def restore_pending_schedule_jobs_from_queue(job_queue):
     if restored or skipped_no_session:
         save_schedule_entries(entries)
 
-    print(f"RESTORED FROM QUEUE: {restored}; SKIPPED NO SESSION: {skipped_no_session}", flush=True)
+    print(f"RESTORED FROM SLOTVIEW: {restored}; SKIPPED NO SESSION: {skipped_no_session}", flush=True)
     return restored
+
+
+def restore_pending_schedule_jobs_from_queue(job_queue):
+    # Старое имя оставлено для совместимости, но Queue больше не источник восстановления.
+    return restore_pending_schedule_jobs_from_slotview(job_queue)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5236,7 +5284,7 @@ async def queue_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(active) > 30:
         lines.append(f"... ще {len(active) - 30} активних рядків")
 
-    lines.append("\nЩоб скасувати: у таблиці Queue постав Status = Cancelled.")
+    lines.append("\nЩоб скасувати: у SlotView постав Статус = Cancelled.")
     lines.append("Щоб вимкнути платформу: TG/FB/IG/YT = OFF.")
     await update.message.reply_text("\n".join(lines))
 
@@ -5303,8 +5351,8 @@ async def run_bot():
     await app.start()
 
     if app.job_queue:
-        restored_local = restore_pending_schedule_jobs(app.job_queue)
-        restored_queue = restore_pending_schedule_jobs_from_queue(app.job_queue)
+        restored_local = 0
+        restored_slotview = restore_pending_schedule_jobs_from_slotview(app.job_queue)
         if ADMIN_ID:
             try:
                 await app.bot.send_message(
