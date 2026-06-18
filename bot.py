@@ -2057,20 +2057,27 @@ def append_slotview_entry(entry: dict):
             run_at = KYIV_TZ.localize(run_at)
         run_at = run_at.astimezone(KYIV_TZ)
 
-        sheet.append_row([
-            run_at.strftime("%d.%m.%Y"),
-            entry.get("id", ""),
-            queue_client_from_session(session),
-            entry.get("package", ""),
-            run_at.strftime("%H:%M"),
-            platform_mark_for_entry(platforms, "telegram"),
-            platform_mark_for_entry(platforms, "facebook"),
-            platform_mark_for_entry(platforms, "instagram"),
-            platform_mark_for_entry(platforms, "youtube"),
-            "Scheduled",
-            "-",
-            encode_session_json(session),
-        ], value_input_option="USER_ENTERED")
+        row = [
+            run_at.strftime("%d.%m.%Y"),              # A: Дата
+            entry.get("id", ""),                     # B: ID
+            queue_client_from_session(session),        # C: Компанія
+            entry.get("package", ""),                # D: Пакет
+            run_at.strftime("%H:%M"),                 # E: Час публікації
+            platform_mark_for_entry(platforms, "telegram"),   # F: TG
+            platform_mark_for_entry(platforms, "facebook"),   # G: FB
+            platform_mark_for_entry(platforms, "instagram"),  # H: IG
+            platform_mark_for_entry(platforms, "youtube"),    # I: YT
+            "Scheduled",                              # J: Статус
+            "-",                                      # K: Звіт
+            encode_session_json(session),              # L: SessionJSON
+        ]
+
+        # ВАЖНО: не используем append_row без диапазона.
+        # Google Sheets сам определял "таблицу" справа (N:Z) и писал туда.
+        # Поэтому пишем явно в A:L в первую свободную строку по колонке A.
+        col_a = sheet.col_values(1)
+        next_row = max(2, len(col_a) + 1)
+        sheet.update(f"A{next_row}:L{next_row}", [row], value_input_option="USER_ENTERED")
     except Exception as e:
         print("SLOTVIEW APPEND ERROR:", e, flush=True)
 
