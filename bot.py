@@ -7,8 +7,8 @@
 # Start: 1/1/1
 # Business: 2/2/2
 # Random slot selection inside window
-# Platform min gaps:
-# Telegram 5m, Facebook 15m, Instagram 20m, YouTube 20m
+# Global slot gap:
+# One slot = one client publication across all selected platforms
 # Admin command: /time
 # =======================================
 
@@ -157,18 +157,20 @@ PACKAGE_DAY_DISTRIBUTION = {
     "business": ["morning", "morning", "day", "day", "evening", "evening"],
 }
 
+GLOBAL_SLOT_GAP_MINUTES = 20
+
 PLATFORM_MIN_GAP_MINUTES = {
-    "telegram": 5,
-    "facebook": 15,
-    "instagram": 20,
-    "youtube": 20,
+    "telegram": GLOBAL_SLOT_GAP_MINUTES,
+    "facebook": GLOBAL_SLOT_GAP_MINUTES,
+    "instagram": GLOBAL_SLOT_GAP_MINUTES,
+    "youtube": GLOBAL_SLOT_GAP_MINUTES,
 }
 
 # Для нового каналу YouTube краще не пробивати денний upload-limit.
 YOUTUBE_DAILY_LIMIT = int(os.getenv("YOUTUBE_DAILY_LIMIT", "10"))
 
-# Крок пошуку всередині блоку. Чим менше крок, тим більш природний розклад.
-SLOT_STEP_MINUTES = 5
+# Крок пошуку всередині блоку. Один слот = один клієнт, інтервал між клієнтами 20 хв.
+SLOT_STEP_MINUTES = GLOBAL_SLOT_GAP_MINUTES
 
 sessions = {}
 web_app = Flask(__name__)
@@ -2000,6 +2002,167 @@ QUEUE_ACTIVE_STATUSES = {"Scheduled", "Running", "Paused", "Error"}
 QUEUE_SKIP_STATUSES = {"Cancelled", "Canceled", "Paused", "Published", "Done"}
 
 
+SLOTVIEW_SHEET_NAME = "SlotView"
+SLOTVIEW_HEADERS = [
+    "Дата", "ID", "Компанія", "Час публікації", "TG", "FB", "IG", "YT", "Статус", "Звіт",
+]
+
+
+def slotview_sheet():
+    """Вкладка SlotView: видимий графік публікацій по клієнтах."""
+    gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+    book = gc.open_by_key(GOOGLE_SHEET_ID)
+
+    try:
+        sheet = book.worksheet(SLOTVIEW_SHEET_NAME)
+    except Exception:
+        sheet = book.add_worksheet(title=SLOTVIEW_SHEET_NAME, rows=1000, cols=len(SLOTVIEW_HEADERS) + 2)
+
+    try:
+        first_row = sheet.row_values(1)
+        if first_row[:len(SLOTVIEW_HEADERS)] != SLOTVIEW_HEADERS:
+            sheet.update([SLOTVIEW_HEADERS], range_name="A1:J1")
+    except Exception as e:
+        print("SLOTVIEW HEADER ERROR:", e, flush=True)
+
+    return sheet
+
+
+def platform_mark_for_entry(platforms: list[str], platform: str, default: str = "⏳") -> str:
+    return default if platform in platforms else "➖"
+
+
+def append_slotview_entry(entry: dict):
+    try:
+        sheet = slotview_sheet()
+        session = entry.get("session") or {}
+        platforms = entry_platforms(entry)
+        run_at = None
+        try:
+            run_at = datetime.fromisoformat(entry.get("run_at"))
+        except Exception:
+            pass
+        if run_at is None:
+            run_at = datetime.now(KYIV_TZ)
+        if run_at.tzinfo is None:
+            run_at = KYIV_TZ.localize(run_at)
+        run_at = run_at.astimezone(KYIV_TZ)
+
+        sheet.append_row([
+            run_at.strftime("%d.%m.%Y"),
+            entry.get("id", ""),
+            queue_client_from_session(session),
+            run_at.strftime("%H:%M"),
+            platform_mark_for_entry(platforms, "telegram"),
+            platform_mark_for_entry(platforms, "facebook"),
+            platform_mark_for_entry(platforms, "instagram"),
+            platform_mark_for_entry(platforms, "youtube"),
+            "Scheduled",
+            "-",
+        ], value_input_option="USER_ENTERED")
+    except Exception as e:
+        print("SLOTVIEW APPEND ERROR:", e, flush=True)
+
+
+def get_slotview_records():
+    try:
+        sheet = slotview_sheet()
+        records = sheet.get_all_records()
+        rows = []
+        for idx, row in enumerate(records, start=2):
+            row["_row"] = idx
+            rows.append(row)
+        return rows
+    except Exception as e:
+        print("SLOTVIEW READ ERROR:", e, flush=True)
+        return []
+
+
+def get_slotview_record_by_id(entry_id: str):
+    entry_id = str(entry_id or "").strip()
+    if not entry_id:
+        return None
+    for row in get_slotview_records():
+        if str(row.get("ID") or "").strip() == entry_id:
+            return row
+    return None
+
+
+def detect_platform_results(success=None, failed=None, platforms=None):
+    success = success or []
+    failed = failed or []
+    platforms = platforms or []
+    result = {"telegram": "➖", "facebook": "➖", "instagram": "➖", "youtube": "➖"}
+    for platform in platforms:
+        result[platform] = "⏳"
+
+    success_text = "\n".join(str(x) for x in success).lower()
+    failed_text = "\n".join(str(x) for x in failed).lower()
+
+    checks = {
+        "telegram": ["@", "telegram"],
+        "facebook": ["facebook"],
+        "instagram": ["instagram"],
+        "youtube": ["youtube", "shorts"],
+    }
+    for platform, keys in checks.items():
+        if platform not in platforms:
+            continue
+        if any(k in failed_text for k in keys):
+            result[platform] = "❌"
+        if any(k in success_text for k in keys):
+            result[platform] = "✅"
+    return result
+
+
+def update_slotview_entry(entry_id: str, status: str, success=None, failed=None, platforms=None):
+    try:
+        row = get_slotview_record_by_id(entry_id)
+        if not row:
+            return False
+        sheet = slotview_sheet()
+        row_num = row.get("_row")
+
+        marks = detect_platform_results(success, failed, platforms or [])
+        # E:H = TG/FB/IG/YT
+        sheet.update(f"E{row_num}:H{row_num}", [[marks["telegram"], marks["facebook"], marks["instagram"], marks["youtube"]]])
+        sheet.update_cell(row_num, 9, status)
+        sheet.update_cell(row_num, 10, datetime.now(KYIV_TZ).strftime("%H:%M"))
+        return True
+    except Exception as e:
+        print("SLOTVIEW UPDATE ERROR:", e, flush=True)
+        return False
+
+
+def parse_slots_date(value: str | None):
+    value = str(value or "").strip().lower()
+    now = datetime.now(KYIV_TZ)
+    if not value:
+        return now
+    if value in ("tomorrow", "завтра"):
+        return now + timedelta(days=1)
+    for fmt in ("%d.%m.%Y", "%d.%m", "%Y-%m-%d"):
+        try:
+            if fmt == "%d.%m":
+                dt = datetime.strptime(value, fmt).replace(year=now.year)
+            else:
+                dt = datetime.strptime(value, fmt)
+            return KYIV_TZ.localize(dt.replace(hour=0, minute=0, second=0, microsecond=0))
+        except Exception:
+            pass
+    return now
+
+
+def slotview_rows_for_day(day_dt: datetime):
+    day_key = day_dt.astimezone(KYIV_TZ).strftime("%d.%m.%Y")
+    rows = []
+    for row in get_slotview_records():
+        if str(row.get("Дата") or "").strip() == day_key:
+            rows.append(row)
+    rows.sort(key=lambda r: str(r.get("Час публікації") or ""))
+    return rows
+
+
 def queue_sheet():
     """Повертає вкладку Queue. Якщо вкладки немає — створює її з правильними заголовками."""
     gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
@@ -2231,29 +2394,24 @@ def queue_capacity_for_day(day_dt: datetime | None = None):
         int((day_part_bounds(day_dt, part)[1] - day_part_bounds(day_dt, part)[0]).total_seconds() // 60)
         for part in DAY_PARTS
     )
-    result = {}
-    for platform, gap in PLATFORM_MIN_GAP_MINUTES.items():
-        total = max(1, total_minutes // gap)
-        if platform == "youtube":
-            total = min(total, YOUTUBE_DAILY_LIMIT)
-        result[platform] = {"total": total, "used": 0, "free": total}
+    total = max(1, total_minutes // GLOBAL_SLOT_GAP_MINUTES)
 
-    rows = get_queue_records()
-    for row in rows:
+    used = 0
+    for row in get_queue_records():
         status = str(row.get("Status") or "").strip()
-        if status != "Scheduled":
+        if status not in ("Scheduled", "Running", "Error"):
             continue
         publish_time = str(row.get("PublishTime") or "").strip()
-        if not publish_time.startswith(day_key):
-            continue
-        for platform in queue_entry_platforms(row):
-            if platform in result:
-                result[platform]["used"] += 1
+        if publish_time.startswith(day_key):
+            used += 1
 
-    for platform in result:
-        result[platform]["free"] = max(0, result[platform]["total"] - result[platform]["used"])
-    return result
-
+    return {
+        "global": {
+            "total": total,
+            "used": used,
+            "free": max(0, total - used),
+        }
+    }
 
 def is_active_schedule_entry(entry: dict) -> bool:
     return entry.get("status") in (None, "pending", "running") and bool(entry.get("slot"))
@@ -2270,26 +2428,27 @@ def day_part_bounds(day_dt: datetime, part: str):
 def slots_for_day_part(day_dt: datetime, part: str):
     start, end = day_part_bounds(day_dt, part)
     slots = []
+
+    # Генеруємо природні хвилини всередині блоку, але кожен наступний клієнт
+    # повинен бути не ближче GLOBAL_SLOT_GAP_MINUTES.
     current = start
-
     while current < end:
-        # Живий час публікації: не 08:00 / 08:05 / 08:10,
-        # а 08:02 / 08:09 / 08:13 тощо.
-        # Так бот не ставить публікації на круглі хвилини.
-        jitter_minutes = random.randint(1, max(1, SLOT_STEP_MINUTES - 1))
-        candidate = current + timedelta(minutes=jitter_minutes)
-
+        max_jitter = max(1, GLOBAL_SLOT_GAP_MINUTES - 1)
+        candidate = current + timedelta(minutes=random.randint(1, max_jitter))
         if candidate < end:
             slots.append(candidate)
+        current += timedelta(minutes=GLOBAL_SLOT_GAP_MINUTES)
 
-        current += timedelta(minutes=SLOT_STEP_MINUTES)
-
-    # Рандом всередині блоку: різні клієнти не отримують однаковий порядок слотів.
     random.shuffle(slots)
     return slots
 
 
 def platform_gap_ok(candidate: datetime, candidate_platforms: list[str], entries: list[dict]) -> bool:
+    """Один слот = один клієнт.
+    Якщо будь-яка активна публікація ближче ніж GLOBAL_SLOT_GAP_MINUTES,
+    новий слот займати не можна, навіть якщо платформи різні.
+    Так клієнт не розʼїжджається по різних платформах і вся публікація йде одним комплектом.
+    """
     candidate = candidate.astimezone(KYIV_TZ)
 
     for entry in entries:
@@ -2306,14 +2465,8 @@ def platform_gap_ok(candidate: datetime, candidate_platforms: list[str], entries
         else:
             other = other.astimezone(KYIV_TZ)
 
-        common_platforms = set(candidate_platforms) & set(entry_platforms(entry))
-        if not common_platforms:
-            continue
-
-        for platform in common_platforms:
-            min_gap = PLATFORM_MIN_GAP_MINUTES.get(platform, 5)
-            if abs((candidate - other).total_seconds()) < min_gap * 60:
-                return False
+        if abs((candidate - other).total_seconds()) < GLOBAL_SLOT_GAP_MINUTES * 60:
+            return False
 
     return True
 
@@ -2374,22 +2527,8 @@ def find_free_slots_for_session(session: dict, start_from: datetime | None = Non
                 chosen = candidate
                 break
 
-            # Якщо конкретний блок дня забитий, шукаємо у наступні дні той самий блок.
-            search_offset = 1
-            while chosen is None and search_offset <= 60:
-                future_day = day_dt + timedelta(days=search_offset)
-                future_candidates = slots_for_day_part(future_day, part if part != "now" else "morning")
-
-                for candidate in future_candidates:
-                    if "youtube" in platforms and youtube_day_count(entries + planned_slots, candidate) >= YOUTUBE_DAILY_LIMIT:
-                        continue
-                    if not platform_gap_ok(candidate, platforms, entries + planned_slots):
-                        continue
-                    chosen = candidate
-                    break
-
-                search_offset += 1
-
+            # Важливо: не переносимо публікацію за межі обраної кількості днів.
+            # 1 день = тільки цей календарний день; якщо місця немає — показуємо помилку.
             if chosen is None:
                 return []
 
@@ -2454,6 +2593,7 @@ def add_schedule_entries(session: dict, slots, package_name: str):
         entries.append(entry)
         new_entries.append(entry)
         append_queue_entry(entry)
+        append_slotview_entry(entry)
 
     save_schedule_entries(entries)
     return new_entries
@@ -2479,6 +2619,17 @@ def update_schedule_entry(entry_id: str, status: str, success=None, failed=None)
             if failed:
                 notes_parts.append("Помилки: " + "; ".join(failed))
             update_queue_entry(entry_id, queue_status, " | ".join(notes_parts) if notes_parts else None)
+
+            if status == "running":
+                update_slotview_entry(entry_id, "Processing", success=[], failed=[], platforms=entry_platforms(entry))
+            elif status in ("done", "published"):
+                update_slotview_entry(entry_id, "Done", success=success, failed=failed, platforms=entry_platforms(entry))
+            elif status in ("done_with_errors",):
+                update_slotview_entry(entry_id, "Partial", success=success, failed=failed, platforms=entry_platforms(entry))
+            elif status in ("failed", "error"):
+                update_slotview_entry(entry_id, "Failed", success=success, failed=failed, platforms=entry_platforms(entry))
+            elif status in ("cancelled", "canceled"):
+                update_slotview_entry(entry_id, "Cancelled", success=success, failed=failed, platforms=entry_platforms(entry))
             break
 
     save_schedule_entries(entries)
@@ -2521,6 +2672,18 @@ def restore_pending_schedule_jobs(job_queue):
 
     print(f"RESTORED SCHEDULED POSTS: {restored}", flush=True)
     return restored
+
+
+def restore_pending_schedule_jobs_from_queue(job_queue):
+    """Страховка після деплою: якщо scheduled_posts.json злетів,
+    але Queue у Google Sheets збереглась, відновлюємо майбутні задачі з Queue.
+    Працює тільки для рядків, які вже є у локальному scheduled_posts.json по ID.
+    Повністю відновити медіа без session неможливо, тому Queue тут використовується
+    як контроль статусу, а не як сховище файлів.
+    """
+    # У цьому коді медіа/session лежить у scheduled_posts.json. Якщо Render повністю стер файл,
+    # із самої таблиці немає Telegram file_id, тому безпечно публікувати нема з чого.
+    return 0
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4822,8 +4985,8 @@ async def schedule_posts(context, query, user_id, session):
 
     if len(slots) < total_publications:
         await query.edit_message_text(
-            "⚠️ Не вдалося знайти достатньо безпечних слотів на 60 днів вперед.\n"
-            "Черга переповнена або денний ліміт YouTube заповнений."
+            f"⚠️ Не вдалося знайти достатньо вільних слотів у межах {days} дн.\n"
+            "1 день = тільки обрана дата. Виберіть більше днів або зменшіть кількість публікацій."
         )
         return
 
@@ -4847,7 +5010,8 @@ async def schedule_posts(context, query, user_id, session):
         f"Вікна: ранок 08:00–11:30, день 12:00–16:30, вечір 17:00–22:00\n"
         f"Розподіл: відповідно до обраного пакета\n"
         f"YouTube ліміт: {YOUTUBE_DAILY_LIMIT} Shorts/день\n"
-        f"Інтервали: TG 5 хв, FB 15 хв, IG 20 хв, YT 20 хв\n\n"
+        f"Інтервал між клієнтами: {GLOBAL_SLOT_GAP_MINUTES} хв\n"
+        f"Один слот = TG/FB/IG/YT разом, якщо платформи вибрані\n\n"
         f"Перша: {first_slot}\n"
         f"Остання: {last_slot}\n\n"
         f"Найближчі слоти:\n{preview}"
@@ -4909,34 +5073,52 @@ async def time_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin_only(update):
         return
 
-    arg = " ".join(context.args).strip().lower() if getattr(context, "args", None) else ""
-    day_dt = datetime.now(KYIV_TZ)
-
-    if arg in ("tomorrow", "завтра"):
-        day_dt += timedelta(days=1)
-
-    capacity = queue_capacity_for_day(day_dt)
+    arg = " ".join(context.args).strip() if getattr(context, "args", None) else ""
+    day_dt = parse_slots_date(arg)
+    capacity = queue_capacity_for_day(day_dt)["global"]
     title_day = day_dt.strftime("%d.%m.%Y")
 
-    names = {
-        "telegram": "Telegram",
-        "facebook": "Facebook",
-        "instagram": "Instagram",
-        "youtube": "YouTube Shorts",
-    }
+    lines = [
+        f"📅 Слоти публікацій на {title_day}",
+        "",
+        f"Єдиний інтервал між клієнтами: {GLOBAL_SLOT_GAP_MINUTES} хв",
+        f"Всього слотів: {capacity['total']}",
+        f"Зайнято: {capacity['used']}",
+        f"Вільно: {capacity['free']}",
+        "",
+        "Команди: /time — сьогодні, /time завтра, /slots 19.06",
+    ]
+    await update.message.reply_text("\n".join(lines))
 
-    lines = [f"📅 Слоти публікацій на {title_day}\n"]
 
-    for platform in ("telegram", "facebook", "instagram", "youtube"):
-        item = capacity[platform]
-        lines.append(
-            f"{names[platform]}:\n"
-            f"Всього: {item['total']}\n"
-            f"Зайнято: {item['used']}\n"
-            f"Вільно: {item['free']}\n"
-        )
+async def slots_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not admin_only(update):
+        return
 
-    lines.append("\nКоманди: /time — сьогодні, /time tomorrow — завтра")
+    arg = " ".join(context.args).strip() if getattr(context, "args", None) else ""
+    day_dt = parse_slots_date(arg)
+    title_day = day_dt.strftime("%d.%m.%Y")
+    rows = slotview_rows_for_day(day_dt)
+
+    capacity = queue_capacity_for_day(day_dt)["global"]
+    lines = [
+        f"📅 SlotView на {title_day}",
+        f"Зайнято: {capacity['used']} | Вільно: {capacity['free']} | Інтервал: {GLOBAL_SLOT_GAP_MINUTES} хв",
+        "",
+    ]
+
+    if not rows:
+        lines.append("На цей день запланованих публікацій немає.")
+    else:
+        for row in rows[:60]:
+            lines.append(
+                f"{row.get('Час публікації')} | ID {row.get('ID')} | {row.get('Компанія')} | "
+                f"TG:{row.get('TG')} FB:{row.get('FB')} IG:{row.get('IG')} YT:{row.get('YT')} | {row.get('Статус')}"
+            )
+        if len(rows) > 60:
+            lines.append(f"... ще {len(rows) - 60} рядків")
+
+    lines.append("\nВкладка Google Sheets: SlotView")
     await update.message.reply_text("\n".join(lines))
 
 async def queue_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5024,6 +5206,7 @@ async def run_bot():
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("time", time_slots))
     app.add_handler(CommandHandler("queue", queue_status))
+    app.add_handler(CommandHandler("slots", slots_view))
 
     # Команды клиентских анкет. Тім показывает эти же команды кнопками после GPT-ответа.
     app.add_handler(CommandHandler("Free", start_free_vacancy_form))
