@@ -131,6 +131,8 @@ CHANNELS = {
 }
 
 PACKAGES = {
+    "free_vacancy": ("Безкоштовна вакансія", []),
+    "free_resume": ("Безкоштовне резюме", []),
     "single": ("Разово", []),
     "start": ("Start", ["08:00", "12:00", "16:00"]),
     "business": ("Business", ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]),
@@ -148,6 +150,8 @@ DAY_PARTS = {
 }
 
 PACKAGE_DAY_DISTRIBUTION = {
+    "free_vacancy": ["morning", "day", "evening"],
+    "free_resume": ["morning", "evening"],
     "single": ["now"],
     "start": ["morning", "day", "evening"],
     "business": ["morning", "morning", "day", "day", "evening", "evening"],
@@ -1203,6 +1207,8 @@ def channels_keyboard(selected):
 
 def packages_keyboard():
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🆓 Безкоштовна вакансія — 3 рази/день", callback_data="package:free_vacancy")],
+        [InlineKeyboardButton("🆓 Безкоштовне резюме — 2 рази/день", callback_data="package:free_resume")],
         [InlineKeyboardButton("Разово — зараз", callback_data="package:single")],
         [InlineKeyboardButton("Start — 08:00 / 12:00 / 16:00", callback_data="package:start")],
         [InlineKeyboardButton("Business — 08:00 / 10:00 / 12:00 / 14:00 / 16:00 / 18:00", callback_data="package:business")],
@@ -2859,28 +2865,12 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if step == "resume_contacts":
             data["contacts"] = text
             form["data"] = data
-
-            admin_text = (
-                "📥 Нове резюме\n\n"
-                f"Тариф: {form.get('tariff')}\n"
-                f"👤 Ім'я: {data.get('name')}\n"
-                f"📍 Місто: {data.get('city')}\n"
-                f"🛠 Спеціальність: {data.get('specialty')}\n"
-                f"💼 Бажана посада: {data.get('position')}\n"
-                f"🎓 Освіта: {data.get('education')}\n"
-                f"📋 Досвід роботи: {data.get('experience')}\n"
-                f"💰 Бажана зарплата: {data.get('salary')}\n"
-                f"📞 Контакти: {data.get('contacts')}"
-            )
-
-            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
-            append_resume_to_sheet(data)
+            form["step"] = "free_channels"
+            form["free_channels"] = []
             await update.message.reply_text(
-                "✅ Резюме прийнято.\n"
-                "Ми перевіримо інформацію та зв'яжемось з вами."
+                "📍 Оберіть канали для публікації резюме:",
+                reply_markup=free_channels_keyboard([]),
             )
-
-            context.user_data.pop("client_form", None)
             return True
 
     # ---------- БАНЕР / REELS / SHORTS ----------
@@ -3010,7 +3000,7 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("salary", "salary", "duties", "📝 Вкажіть обов'язки:"),
         ("duties", "duties", "benefits", "🎁 Що пропонує компанія?\nНаприклад: харчування, розвозка, житло, бонуси, навчання тощо."),
         ("benefits", "benefits", "contacts", "📞 Вкажіть контакти:"),
-        ("contacts", "contacts", "days", "📅 На скільки днів розміщення?\n\n1 / 3 / 7 / 14 / 30"),
+        ("contacts", "contacts", "free_channels", "📍 Оберіть канали для публікації вакансії:"),
     ]
 
     for current_step, field_name, next_step, question in vacancy_steps:
@@ -3018,7 +3008,11 @@ async def client_form_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data[field_name] = text
             form["step"] = next_step
             form["data"] = data
-            await update.message.reply_text(question)
+            if next_step == "free_channels":
+                form["free_channels"] = []
+                await update.message.reply_text(question, reply_markup=free_channels_keyboard([]))
+            else:
+                await update.message.reply_text(question)
             return True
 
     if step == "days":
@@ -4851,7 +4845,7 @@ async def schedule_posts(context, query, user_id, session):
         f"Днів: {days}\n"
         f"Публікацій на платформу: {total_publications}\n\n"
         f"Вікна: ранок 08:00–11:30, день 12:00–16:30, вечір 17:00–22:00\n"
-        f"Розподіл: Start 1/1/1, Business 2/2/2\n"
+        f"Розподіл: відповідно до обраного пакета\n"
         f"YouTube ліміт: {YOUTUBE_DAILY_LIMIT} Shorts/день\n"
         f"Інтервали: TG 5 хв, FB 15 хв, IG 20 хв, YT 20 хв\n\n"
         f"Перша: {first_slot}\n"
