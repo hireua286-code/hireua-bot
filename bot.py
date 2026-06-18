@@ -2578,14 +2578,19 @@ def youtube_day_count(entries: list[dict], day_dt: datetime) -> int:
     return count
 
 
-def find_free_slots_for_session(session: dict, start_from: datetime | None = None):
+def find_free_slots_for_session(
+    session: dict,
+    start_from: datetime | None = None,
+    distribution_override: list[str] | None = None,
+    days_override: int | None = None,
+):
     # SlotView = головне джерело зайнятих майбутніх слотів.
     # Старий Queue і локальний scheduled_posts.json більше не блокують новий графік.
     entries = slotview_active_entries(include_past=False)
     platforms = selected_platforms(session)
     package_key = session.get("package", "single")
-    days = int(session.get("days", 1))
-    distribution = PACKAGE_DAY_DISTRIBUTION.get(package_key, PACKAGE_DAY_DISTRIBUTION["start"])
+    days = int(days_override if days_override is not None else session.get("days", 1))
+    distribution = distribution_override or PACKAGE_DAY_DISTRIBUTION.get(package_key, PACKAGE_DAY_DISTRIBUTION["start"])
 
     now = start_from or datetime.now(KYIV_TZ)
     earliest = now + timedelta(minutes=1)
@@ -2950,6 +2955,41 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["days"] = int(value)
         await schedule_posts(context, query, user_id, session)
         return
+
+    if key == "schedule_choice":
+        if value == "cancel":
+            sessions.pop(user_id, None)
+            await query.edit_message_text("❌ Планування скасовано.")
+            return
+
+        if value == "partial_today":
+            distribution = session.get("_schedule_remaining_distribution") or remaining_distribution_for_today(session.get("package", "start"))
+            if not distribution:
+                await query.edit_message_text("⚠️ На сьогодні вже немає доступних вікон. Оберіть завтра або більше днів.")
+                return
+
+            session["days"] = 1
+            await schedule_posts(
+                context,
+                query,
+                user_id,
+                session,
+                distribution_override=distribution,
+                custom_total_publications=len(distribution),
+            )
+            return
+
+        if value == "full_tomorrow":
+            session["days"] = 1
+            start_dt = tomorrow_start_dt()
+            await schedule_posts(
+                context,
+                query,
+                user_id,
+                session,
+                start_from=start_dt,
+            )
+            return
 
 
 async def go_to_materials(query, session):
@@ -5097,18 +5137,102 @@ def make_result(success, failed):
     return result
 
 
-async def schedule_posts(context, query, user_id, session):
+
+def remaining_distribution_for_today(package_key: str, now: datetime | None = None) -> list[str]:
+    """Повертає тільки ті частини пакета, вікна яких ще не минули сьогодні.
+
+    Приклад: Business після 11:30 = ["day", "day", "evening", "evening"].
+    Це потрібно для адмінського вибору "поставити залишок сьогодні".
+    """
+    now = (now or datetime.now(KYIV_TZ)).astimezone(KYIV_TZ)
+    distribution = PACKAGE_DAY_DISTRIBUTION.get(package_key, PACKAGE_DAY_DISTRIBUTION["start"])
+    today = now
+
+    remaining = []
+    for part in distribution:
+        if part == "now":
+            remaining.append(part)
+            continue
+
+        _, end = day_part_bounds(today, part)
+        if end > now + timedelta(minutes=1):
+            remaining.append(part)
+
+    return remaining
+
+
+def tomorrow_start_dt(now: datetime | None = None) -> datetime:
+    now = (now or datetime.now(KYIV_TZ)).astimezone(KYIV_TZ)
+    tomorrow = now + timedelta(days=1)
+    return tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def schedule_admin_choice_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Поставити доступні сьогодні", callback_data="schedule_choice:partial_today")],
+        [InlineKeyboardButton("➡️ Повний пакет на завтра", callback_data="schedule_choice:full_tomorrow")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="schedule_choice:cancel")],
+    ])
+
+
+async def schedule_posts(
+    context,
+    query,
+    user_id,
+    session,
+    start_from: datetime | None = None,
+    distribution_override: list[str] | None = None,
+    custom_total_publications: int | None = None,
+):
     package_name, times = PACKAGES[session["package"]]
     await prepare_session_drive_files(context, session)
     saved_session = deepcopy(session)
     days = int(session.get("days", 1))
 
-    publications_per_day = len(PACKAGE_DAY_DISTRIBUTION.get(session["package"], []))
-    total_publications = publications_per_day * days
+    base_distribution = distribution_override or PACKAGE_DAY_DISTRIBUTION.get(session["package"], [])
+    publications_per_day = len(base_distribution)
+    total_publications = custom_total_publications or (publications_per_day * days)
 
-    slots = find_free_slots_for_session(saved_session)
+    slots = find_free_slots_for_session(
+        saved_session,
+        start_from=start_from,
+        distribution_override=distribution_override,
+        days_override=days,
+    )
 
     if len(slots) < total_publications:
+        # Якщо адмін планує 1 день після того, як частина вікон уже минула,
+        # не валимося просто помилкою. Показуємо зрозумілий вибір:
+        # залишок сьогодні / повний пакет завтра / скасувати.
+        if days == 1 and distribution_override is None:
+            now = datetime.now(KYIV_TZ)
+            remaining_distribution = remaining_distribution_for_today(session["package"], now)
+            remaining_slots = []
+
+            if remaining_distribution:
+                remaining_slots = find_free_slots_for_session(
+                    saved_session,
+                    start_from=now,
+                    distribution_override=remaining_distribution,
+                    days_override=1,
+                )
+
+            if remaining_slots:
+                session["_schedule_remaining_distribution"] = remaining_distribution
+                session["_schedule_remaining_count"] = len(remaining_slots)
+
+                full_count = len(PACKAGE_DAY_DISTRIBUTION.get(session["package"], []))
+                await query.edit_message_text(
+                    "⚠️ На сьогодні не вистачає часу для повного пакета.\n\n"
+                    f"Пакет: {package_name}\n"
+                    f"Потрібно: {full_count} публікацій\n"
+                    f"Доступно сьогодні: {len(remaining_slots)}\n\n"
+                    "Причина: частина денних вікон уже минула.\n"
+                    "Оберіть, що робимо:",
+                    reply_markup=schedule_admin_choice_keyboard(),
+                )
+                return
+
         await query.edit_message_text(
             f"⚠️ Не вдалося знайти достатньо вільних слотів у межах {days} дн.\n"
             "1 день = тільки обрана дата. Виберіть більше днів або зменшіть кількість публікацій."
