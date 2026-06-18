@@ -1997,6 +1997,7 @@ QUEUE_HEADERS = [
     "ID", "Created", "Client", "Package", "Content", "Platforms", "Channels",
     "PublishTime", "Status", "Notes", "TG", "FB", "IG", "YT",
     "BannerDriveID", "BannerDriveLink", "ReelsDriveID", "ReelsDriveLink",
+    "SessionJSON",
 ]
 QUEUE_ACTIVE_STATUSES = {"Scheduled", "Running", "Paused", "Error"}
 QUEUE_SKIP_STATUSES = {"Cancelled", "Canceled", "Paused", "Published", "Done"}
@@ -2287,6 +2288,27 @@ def queue_platforms_string(platforms: list[str]) -> str:
     return ",".join(mapping.get(p, p) for p in platforms)
 
 
+def encode_session_json(session: dict) -> str:
+    """Зберігає всю session у Queue, щоб після деплою можна було відновити JobQueue."""
+    try:
+        return json.dumps(session or {}, ensure_ascii=False, separators=(",", ":"))
+    except Exception as e:
+        print("SESSION JSON ENCODE ERROR:", e, flush=True)
+        return ""
+
+
+def decode_session_json(value: str) -> dict | None:
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        data = json.loads(value)
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        print("SESSION JSON DECODE ERROR:", e, flush=True)
+        return None
+
+
 def append_queue_entry(entry: dict):
     """Записує одну заплановану публікацію у вкладку Queue."""
     try:
@@ -2323,6 +2345,7 @@ def append_queue_entry(entry: dict):
             session.get("banner_drive_link", ""),
             session.get("reels_drive_id", ""),
             session.get("reels_drive_link", ""),
+            encode_session_json(session),
         ], value_input_option="USER_ENTERED")
     except Exception as e:
         print("QUEUE APPEND ERROR:", e, flush=True)
@@ -2675,15 +2698,69 @@ def restore_pending_schedule_jobs(job_queue):
 
 
 def restore_pending_schedule_jobs_from_queue(job_queue):
-    """Страховка після деплою: якщо scheduled_posts.json злетів,
-    але Queue у Google Sheets збереглась, відновлюємо майбутні задачі з Queue.
-    Працює тільки для рядків, які вже є у локальному scheduled_posts.json по ID.
-    Повністю відновити медіа без session неможливо, тому Queue тут використовується
-    як контроль статусу, а не як сховище файлів.
+    """Повне відновлення після деплою з Google Sheets Queue.
+
+    Queue = головне джерело правди. Для кожного майбутнього рядка зі статусом
+    Scheduled / Running / Error бот бере SessionJSON і заново реєструє JobQueue.
     """
-    # У цьому коді медіа/session лежить у scheduled_posts.json. Якщо Render повністю стер файл,
-    # із самої таблиці немає Telegram file_id, тому безпечно публікувати нема з чого.
-    return 0
+    now = datetime.now(KYIV_TZ)
+    restored = 0
+    skipped_no_session = 0
+
+    entries = load_schedule_entries()
+    entry_by_id = {str(e.get("id") or "").strip(): e for e in entries if e.get("id")}
+    registered_ids = set()
+
+    for row in get_queue_records():
+        entry_id = str(row.get("ID") or "").strip()
+        if not entry_id or entry_id in registered_ids:
+            continue
+
+        status = str(row.get("Status") or "").strip()
+        if status not in ("Scheduled", "Running", "Error"):
+            continue
+
+        publish_time = parse_queue_time(row.get("PublishTime"))
+        if not publish_time or publish_time <= now:
+            continue
+
+        local_entry = entry_by_id.get(entry_id) or {}
+        session = decode_session_json(row.get("SessionJSON")) or local_entry.get("session")
+        if not session:
+            skipped_no_session += 1
+            update_queue_entry(entry_id, "Error", "Не вдалося відновити після деплою: порожній SessionJSON")
+            continue
+
+        platforms = queue_entry_platforms(row) or local_entry.get("platforms") or selected_platforms(session)
+        package_name = str(row.get("Package") or local_entry.get("package") or "")
+
+        entry = {
+            "id": entry_id,
+            "status": "pending",
+            "slot": slot_key(publish_time),
+            "run_at": publish_time.isoformat(),
+            "package": package_name,
+            "platforms": platforms,
+            "created_at": local_entry.get("created_at") or str(row.get("Created") or ""),
+            "restored_from_queue_at": now.isoformat(),
+            "session": deepcopy(session),
+        }
+
+        if entry_id in entry_by_id:
+            entry_by_id[entry_id].update(entry)
+        else:
+            entries.append(entry)
+            entry_by_id[entry_id] = entry
+
+        if register_schedule_job(job_queue, entry):
+            restored += 1
+            registered_ids.add(entry_id)
+
+    if restored or skipped_no_session:
+        save_schedule_entries(entries)
+
+    print(f"RESTORED FROM QUEUE: {restored}; SKIPPED NO SESSION: {skipped_no_session}", flush=True)
+    return restored
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5226,7 +5303,16 @@ async def run_bot():
     await app.start()
 
     if app.job_queue:
-        restore_pending_schedule_jobs(app.job_queue)
+        restored_local = restore_pending_schedule_jobs(app.job_queue)
+        restored_queue = restore_pending_schedule_jobs_from_queue(app.job_queue)
+        if ADMIN_ID:
+            try:
+                await app.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"♻️ Відновлення після запуску\nФайл: {restored_local} задач\nQueue: {restored_queue} задач",
+                )
+            except Exception as e:
+                print("RESTORE REPORT SEND ERROR:", e, flush=True)
         app.job_queue.run_repeating(
             check_paid_clients_welcome,
             interval=PAID_WELCOME_CHECK_INTERVAL,
