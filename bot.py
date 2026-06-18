@@ -323,13 +323,37 @@ def save_user_to_sheet(update: Update, last_message: str = ""):
         print("GOOGLE SHEETS ERROR:", e, flush=True)
 
 
-def append_vacancy_to_sheet(data: dict, tariff: str = ""):
+def append_vacancy_to_sheet(data: dict, tariff: str = "", user=None):
     try:
         now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
         gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
         sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("Vacancies")
+        telegram_id = getattr(user, "id", "") if user else data.get("telegram_id", "")
 
-        sheet.append_row([
+        values_map = [
+            (["Дата", "Created", "Date"], now),
+            (["Компанія", "Компания", "Company"], data.get("company", "")),
+            (["Посада", "Position"], data.get("position", "")),
+            (["Місто", "Город", "City"], data.get("city", "")),
+            (["Адреса", "Адрес", "Address"], data.get("address", "")),
+            (["Освіта", "Education"], data.get("education", "")),
+            (["Досвід", "Досвід роботи", "Experience"], data.get("experience", "")),
+            (["Графік", "Графік роботи", "Schedule"], data.get("schedule", "")),
+            (["Зарплата", "Salary"], data.get("salary", "")),
+            (["Обов'язки", "Обовʼязки", "Обовязки", "Duties"], data.get("duties", "")),
+            (["Переваги", "Компанія пропонує", "Benefits"], data.get("benefits", "")),
+            (["Контакти", "Contacts"], data.get("contacts", "")),
+            (["Тариф", "Tariff"], tariff),
+            (["Статус", "Status"], FREE_NEW_STATUS),
+            (["Канали", "Channels"], data.get("channels", "")),
+            (["Днів", "Дни", "Days"], data.get("days", "")),
+            (["Публ/день", "Публікацій/день", "Posts/day"], data.get("posts_per_day", FREE_VACANCY_PER_DAY)),
+            (["Дата старту", "Start Date"], ""),
+            (["Дата завершення", "End Date"], ""),
+            (["Telegram ID", "TG ID"], telegram_id),
+        ]
+
+        fallback_row = [
             now,
             data.get("company", ""),
             data.get("position", ""),
@@ -342,13 +366,18 @@ def append_vacancy_to_sheet(data: dict, tariff: str = ""):
             data.get("duties", ""),
             data.get("benefits", ""),
             data.get("contacts", ""),
-            data.get("days", ""),
             tariff,
-            "Новий",
-        ])
+            FREE_NEW_STATUS,
+            data.get("channels", ""),
+            data.get("days", ""),
+            data.get("posts_per_day", FREE_VACANCY_PER_DAY),
+            "",
+            "",
+            telegram_id,
+        ]
+        append_row_by_headers(sheet, values_map, fallback_row)
     except Exception as e:
         print("GOOGLE VACANCY ERROR:", e, flush=True)
-
 
 def append_client_to_sheet(data: dict, tariff: str = "", user=None):
     try:
@@ -582,13 +611,33 @@ async def start_paid_content_chat(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
-def append_resume_to_sheet(data: dict):
+def append_resume_to_sheet(data: dict, user=None):
     try:
         now = datetime.now(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
         gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
         sheet = gc.open_by_key(GOOGLE_SHEET_ID).worksheet("Resumes")
+        telegram_id = getattr(user, "id", "") if user else data.get("telegram_id", "")
 
-        sheet.append_row([
+        values_map = [
+            (["Дата", "Created", "Date"], now),
+            (["Ім'я", "Імʼя", "Имя", "Name"], data.get("name", "")),
+            (["Місто", "Город", "City"], data.get("city", "")),
+            (["Спеціальність", "Специальность", "Specialty"], data.get("specialty", "")),
+            (["Посада", "Бажана посада", "Position"], data.get("position", "")),
+            (["Освіта", "Education"], data.get("education", "")),
+            (["Досвід", "Досвід роботи", "Experience"], data.get("experience", "")),
+            (["Зарплата", "Бажана зарплата", "Salary"], data.get("salary", "")),
+            (["Контакти", "Contacts"], data.get("contacts", "")),
+            (["Статус", "Status"], FREE_NEW_STATUS),
+            (["Канали", "Channels"], data.get("channels", "")),
+            (["Днів", "Дни", "Days"], data.get("days", "")),
+            (["Публ/день", "Публікацій/день", "Posts/day"], data.get("posts_per_day", FREE_RESUME_PER_DAY)),
+            (["Дата старту", "Start Date"], ""),
+            (["Дата завершення", "End Date"], ""),
+            (["Telegram ID", "TG ID"], telegram_id),
+        ]
+
+        fallback_row = [
             now,
             data.get("name", ""),
             data.get("city", ""),
@@ -598,11 +647,17 @@ def append_resume_to_sheet(data: dict):
             data.get("experience", ""),
             data.get("salary", ""),
             data.get("contacts", ""),
-            "Новий",
-        ])
+            FREE_NEW_STATUS,
+            data.get("channels", ""),
+            data.get("days", ""),
+            data.get("posts_per_day", FREE_RESUME_PER_DAY),
+            "",
+            "",
+            telegram_id,
+        ]
+        append_row_by_headers(sheet, values_map, fallback_row)
     except Exception as e:
         print("GOOGLE RESUME ERROR:", e, flush=True)
-
 
 def append_content_brief_to_sheet(data: dict, tariff: str = "", user_id: int = None, order_type: str = ""):
     try:
@@ -699,6 +754,104 @@ async def client_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     data = query.data
+
+    if data.startswith("free_channel:"):
+        form = context.user_data.get("client_form") or {}
+        if form.get("type") not in ("vacancy", "resume"):
+            await query.message.reply_text("Натисніть /start для нової заявки.")
+            return
+        key = data.split(":", 1)[1]
+        selected = form.setdefault("free_channels", [])
+        if key in selected:
+            selected.remove(key)
+        else:
+            selected.append(key)
+        await query.edit_message_text("📍 Оберіть канали для публікації:", reply_markup=free_channels_keyboard(selected))
+        return
+
+    if data == "free_channels_done":
+        form = context.user_data.get("client_form") or {}
+        selected = form.get("free_channels") or []
+        if form.get("type") not in ("vacancy", "resume"):
+            await query.message.reply_text("Натисніть /start для нової заявки.")
+            return
+        if not selected:
+            await query.answer("Оберіть хоча б один канал", show_alert=True)
+            return
+        form["step"] = "free_days"
+        await query.edit_message_text("📅 На який термін актуальна публікація?", reply_markup=free_days_keyboard())
+        return
+
+    if data.startswith("free_days:"):
+        form = context.user_data.get("client_form") or {}
+        if form.get("type") not in ("vacancy", "resume"):
+            await query.message.reply_text("Натисніть /start для нової заявки.")
+            return
+        days = int(data.split(":", 1)[1])
+        form_data = form.get("data", {})
+        selected = form.get("free_channels") or []
+        form_data["channels"] = channel_names_from_keys(selected)
+        form_data["days"] = days
+        form_data["telegram_id"] = update.effective_user.id
+
+        if form.get("type") == "resume":
+            form_data["posts_per_day"] = FREE_RESUME_PER_DAY
+            admin_text = (
+                "📥 Нове резюме\n\n"
+                f"Тариф: Безкоштовне резюме\n"
+                f"👤 Ім'я: {form_data.get('name')}\n"
+                f"📍 Місто: {form_data.get('city')}\n"
+                f"🛠 Спеціальність: {form_data.get('specialty')}\n"
+                f"💼 Бажана посада: {form_data.get('position')}\n"
+                f"🎓 Освіта: {form_data.get('education')}\n"
+                f"📋 Досвід роботи: {form_data.get('experience')}\n"
+                f"💰 Бажана зарплата: {form_data.get('salary')}\n"
+                f"📞 Контакти: {form_data.get('contacts')}\n"
+                f"📍 Канали: {form_data.get('channels')}\n"
+                f"📅 Днів: {form_data.get('days')}\n"
+                f"🔁 Публікацій/день: {FREE_RESUME_PER_DAY}"
+            )
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+            append_resume_to_sheet(form_data, update.effective_user)
+            await query.edit_message_text(
+                "✅ Резюме отримано.\n\n"
+                "Ваша публікація буде опублікована після перевірки адміністратором.\n\n"
+                f"Безкоштовне розміщення: {FREE_RESUME_PER_DAY} публікації на день.\n"
+                f"Канали: {form_data.get('channels')}\n"
+                f"Термін: {days} дн."
+            )
+        else:
+            form_data["posts_per_day"] = FREE_VACANCY_PER_DAY
+            admin_text = (
+                "📥 Нова вакансія\n\n"
+                f"Тариф: Безкоштовна текстова вакансія\n"
+                f"🏢 Компанія: {form_data.get('company')}\n"
+                f"💼 Посада: {form_data.get('position')}\n"
+                f"📍 Місто: {form_data.get('city')}\n"
+                f"📍 Адреса: {form_data.get('address')}\n"
+                f"🎓 Освіта: {form_data.get('education')}\n"
+                f"📋 Досвід роботи: {form_data.get('experience')}\n"
+                f"🕒 Графік роботи: {form_data.get('schedule')}\n"
+                f"💰 Зарплата: {form_data.get('salary')}\n"
+                f"📝 Обов'язки: {form_data.get('duties')}\n"
+                f"🎁 Компанія пропонує: {form_data.get('benefits')}\n"
+                f"📞 Контакти: {form_data.get('contacts')}\n"
+                f"📍 Канали: {form_data.get('channels')}\n"
+                f"📅 Днів: {form_data.get('days')}\n"
+                f"🔁 Публікацій/день: {FREE_VACANCY_PER_DAY}"
+            )
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+            append_vacancy_to_sheet(form_data, form.get("tariff", "Безкоштовна текстова вакансія"), update.effective_user)
+            await query.edit_message_text(
+                "✅ Вакансію отримано.\n\n"
+                "Ваша публікація буде опублікована після перевірки адміністратором.\n\n"
+                f"Безкоштовне розміщення: {FREE_VACANCY_PER_DAY} публікації на день.\n"
+                f"Канали: {form_data.get('channels')}\n"
+                f"Термін: {days} дн."
+            )
+
+        context.user_data.pop("client_form", None)
+        return
 
     if data == "client_back":
         await query.message.reply_text("Оберіть потрібний розділ нижче 👇", reply_markup=client_main_keyboard())
@@ -1064,6 +1217,264 @@ def days_keyboard():
         [InlineKeyboardButton("14 днів", callback_data="days:14")],
         [InlineKeyboardButton("30 днів", callback_data="days:30")],
     ])
+
+
+
+
+# === FREE VACANCIES / RESUMES SETTINGS ===
+FREE_PUBLICATIONS_STATE_FILE = "free_publications_state.json"
+FREE_DAYS_OPTIONS = [1, 3, 7, 14, 30]
+FREE_RESUME_PER_DAY = 2
+FREE_VACANCY_PER_DAY = 3
+FREE_PUBLICATION_TIMES = {
+    "resume": [(10, 0), (17, 0)],
+    "vacancy": [(9, 0), (13, 0), (18, 0)],
+}
+FREE_ACTIVE_STATUS = "OK"
+FREE_NEW_STATUS = "Новий"
+FREE_FINISHED_STATUS = "Finished"
+FREE_CANCELLED_STATUS = "Cancelled"
+
+
+def free_channels_keyboard(selected):
+    keyboard = []
+    selected = selected or []
+    for key, (name, chat) in CHANNELS.items():
+        mark = "✅" if key in selected else "☐"
+        keyboard.append([InlineKeyboardButton(f"{mark} {name} {chat}", callback_data=f"free_channel:{key}")])
+    keyboard.append([InlineKeyboardButton("✅ Готово", callback_data="free_channels_done")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def free_days_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("1 день", callback_data="free_days:1")],
+        [InlineKeyboardButton("3 дні", callback_data="free_days:3")],
+        [InlineKeyboardButton("7 днів", callback_data="free_days:7")],
+        [InlineKeyboardButton("14 днів", callback_data="free_days:14")],
+        [InlineKeyboardButton("30 днів", callback_data="free_days:30")],
+    ])
+
+
+def channel_names_from_keys(keys):
+    names = []
+    for key in keys or []:
+        if key in CHANNELS:
+            names.append(CHANNELS[key][0])
+        else:
+            names.append(str(key))
+    return ", ".join(names)
+
+
+def channel_keys_from_names(value: str):
+    raw = [x.strip().replace("@", "") for x in str(value or "").split(",") if x.strip()]
+    keys = []
+    for item in raw:
+        low = item.lower()
+        for key, (name, chat) in CHANNELS.items():
+            if low in (key.lower(), name.lower(), chat.replace("@", "").lower(), chat.lower()):
+                if key not in keys:
+                    keys.append(key)
+    return keys
+
+
+def load_free_state():
+    if not os.path.exists(FREE_PUBLICATIONS_STATE_FILE):
+        return {}
+    try:
+        with open(FREE_PUBLICATIONS_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_free_state(state):
+    tmp = FREE_PUBLICATIONS_STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, FREE_PUBLICATIONS_STATE_FILE)
+
+
+def parse_free_date(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    for fmt in ("%d.%m.%Y", "%d.%m.%Y %H:%M", "%Y-%m-%d"):
+        try:
+            return KYIV_TZ.localize(datetime.strptime(value, fmt))
+        except Exception:
+            pass
+    return None
+
+
+def format_free_date(dt):
+    return dt.astimezone(KYIV_TZ).strftime("%d.%m.%Y")
+
+
+def normalize_header(h):
+    return str(h or "").strip().lower().replace("і", "i").replace("ї", "i").replace("є", "е")
+
+
+def set_by_headers(row, headers, names, value):
+    norm_names = {normalize_header(n) for n in names}
+    for idx, h in enumerate(headers):
+        if normalize_header(h) in norm_names:
+            while len(row) < len(headers):
+                row.append("")
+            row[idx] = value
+            return True
+    return False
+
+
+def append_row_by_headers(sheet, values_map, fallback_row):
+    headers = sheet.row_values(1)
+    if not headers:
+        sheet.append_row(fallback_row, value_input_option="USER_ENTERED")
+        return
+    row = [""] * len(headers)
+    for names, value in values_map:
+        set_by_headers(row, headers, names, value)
+    # If headers were not matched at all, use old fallback.
+    if not any(str(x).strip() for x in row):
+        row = fallback_row
+    sheet.append_row(row, value_input_option="USER_ENTERED")
+
+
+def free_status_cell(sheet, row_idx, headers):
+    for idx, h in enumerate(headers, start=1):
+        if normalize_header(h) in {"статус", "status"}:
+            return row_idx, idx
+    return None
+
+
+def free_header_index(headers, names):
+    norm_names = {normalize_header(n) for n in names}
+    for idx, h in enumerate(headers):
+        if normalize_header(h) in norm_names:
+            return idx
+    return None
+
+
+def free_get(row, headers, names, default=""):
+    idx = free_header_index(headers, names)
+    if idx is None or idx >= len(row):
+        return default
+    return row[idx]
+
+
+def free_set_cell(sheet, row_idx, headers, names, value):
+    idx = free_header_index(headers, names)
+    if idx is not None:
+        sheet.update_cell(row_idx, idx + 1, value)
+
+
+def format_free_vacancy(row, headers):
+    return (
+        "👨‍💼 Вакансія\n\n"
+        f"🏢 Компанія: {free_get(row, headers, ['Компанія', 'Компания', 'Company'])}\n"
+        f"💼 Посада: {free_get(row, headers, ['Посада', 'Position'])}\n"
+        f"📍 Місто: {free_get(row, headers, ['Місто', 'Город', 'City'])}\n"
+        f"📍 Адреса: {free_get(row, headers, ['Адреса', 'Адрес', 'Address'])}\n"
+        f"🎓 Освіта: {free_get(row, headers, ['Освіта', 'Education'])}\n"
+        f"📋 Досвід: {free_get(row, headers, ['Досвід', 'Досвід роботи', 'Experience'])}\n"
+        f"🕒 Графік: {free_get(row, headers, ['Графік', 'Графік роботи', 'Schedule'])}\n"
+        f"💰 Зарплата: {free_get(row, headers, ['Зарплата', 'Salary'])}\n"
+        f"📝 Обовʼязки: {free_get(row, headers, ['Обовʼязки', 'Обовязки', 'Duties'])}\n"
+        f"🎁 Умови: {free_get(row, headers, ['Переваги', 'Компанія пропонує', 'Benefits'])}\n"
+        f"📞 Контакти: {free_get(row, headers, ['Контакти', 'Contacts'])}"
+    )
+
+
+def format_free_resume(row, headers):
+    return (
+        "👷 Резюме\n\n"
+        f"👤 Імʼя: {free_get(row, headers, ['Ім\'я', 'Имя', 'Name'])}\n"
+        f"📍 Місто: {free_get(row, headers, ['Місто', 'Город', 'City'])}\n"
+        f"🛠 Спеціальність: {free_get(row, headers, ['Спеціальність', 'Специальность', 'Specialty'])}\n"
+        f"💼 Бажана посада: {free_get(row, headers, ['Посада', 'Бажана посада', 'Position'])}\n"
+        f"🎓 Освіта: {free_get(row, headers, ['Освіта', 'Education'])}\n"
+        f"📋 Досвід: {free_get(row, headers, ['Досвід', 'Досвід роботи', 'Experience'])}\n"
+        f"💰 Бажана зарплата: {free_get(row, headers, ['Зарплата', 'Бажана зарплата', 'Salary'])}\n"
+        f"📞 Контакти: {free_get(row, headers, ['Контакти', 'Contacts'])}"
+    )
+
+
+async def check_free_publications(context: ContextTypes.DEFAULT_TYPE):
+    """Публікує безкоштовні вакансії/резюме тільки після статусу OK.
+    Cancelled/Finished не публікуються. Дата завершення закриває рядок автоматично.
+    """
+    try:
+        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
+        book = gc.open_by_key(GOOGLE_SHEET_ID)
+        state = load_free_state()
+        now = datetime.now(KYIV_TZ)
+        today_key = now.strftime("%Y-%m-%d")
+
+        for sheet_name, item_type, per_day in (("Vacancies", "vacancy", FREE_VACANCY_PER_DAY), ("Resumes", "resume", FREE_RESUME_PER_DAY)):
+            try:
+                sheet = book.worksheet(sheet_name)
+                values = sheet.get_all_values()
+            except Exception as e:
+                print(f"FREE {sheet_name} READ ERROR:", e, flush=True)
+                continue
+            if not values:
+                continue
+            headers = values[0]
+            for row_idx, row in enumerate(values[1:], start=2):
+                status = str(free_get(row, headers, ["Статус", "Status"]) or "").strip()
+                if status == FREE_CANCELLED_STATUS or status == FREE_FINISHED_STATUS:
+                    continue
+                if status != FREE_ACTIVE_STATUS:
+                    continue
+
+                days_raw = free_get(row, headers, ["Днів", "Дни", "Days"], "1")
+                try:
+                    days = int(str(days_raw).strip())
+                except Exception:
+                    days = 1
+                if days not in FREE_DAYS_OPTIONS:
+                    days = 1
+
+                start_dt = parse_free_date(free_get(row, headers, ["Дата старту", "Start Date"]))
+                end_dt = parse_free_date(free_get(row, headers, ["Дата завершення", "End Date"]))
+                if not start_dt:
+                    start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_dt = start_dt + timedelta(days=days)
+                    free_set_cell(sheet, row_idx, headers, ["Дата старту", "Start Date"], format_free_date(start_dt))
+                    free_set_cell(sheet, row_idx, headers, ["Дата завершення", "End Date"], format_free_date(end_dt))
+                if end_dt and now.date() >= end_dt.date():
+                    free_set_cell(sheet, row_idx, headers, ["Статус", "Status"], FREE_FINISHED_STATUS)
+                    continue
+
+                channels = channel_keys_from_names(free_get(row, headers, ["Канали", "Channels"]))
+                if not channels:
+                    continue
+
+                item_key = f"{sheet_name}:{row_idx}"
+                day_state = state.setdefault(item_key, {}).setdefault(today_key, [])
+                already = len(day_state)
+                if already >= per_day:
+                    continue
+
+                times = FREE_PUBLICATION_TIMES[item_type]
+                for slot_index, (hour, minute) in enumerate(times[:per_day]):
+                    slot_id = f"{today_key}:{slot_index}"
+                    if slot_id in day_state:
+                        continue
+                    if now.hour > hour or (now.hour == hour and now.minute >= minute):
+                        text = format_free_vacancy(row, headers) if item_type == "vacancy" else format_free_resume(row, headers)
+                        text += "\n\n@HireUkraine"
+                        for ch_key in channels:
+                            chat = CHANNELS[ch_key][1]
+                            try:
+                                await context.bot.send_message(chat_id=chat, text=text, reply_markup=tim_keyboard())
+                            except Exception as e:
+                                print(f"FREE PUBLISH ERROR {chat}:", e, flush=True)
+                        day_state.append(slot_id)
+                        save_free_state(state)
+                        break
+    except Exception as e:
+        print("FREE PUBLICATIONS CHECK ERROR:", e, flush=True)
 
 
 def load_schedule_entries():
@@ -4628,7 +5039,7 @@ async def run_bot():
     app.add_handler(CommandHandler("Promo", start_promo_form))
     app.add_handler(CommandHandler("Reels", start_reels_form))
     app.add_handler(CallbackQueryHandler(client_resume_start, pattern="^client_resume$"))
-    app.add_handler(CallbackQueryHandler(client_buttons, pattern="^(client_|vacancy_|content_)"))
+    app.add_handler(CallbackQueryHandler(client_buttons, pattern="^(client_|vacancy_|content_|free_)"))
     app.add_handler(CallbackQueryHandler(buttons))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, handle_media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
@@ -4644,6 +5055,12 @@ async def run_bot():
             interval=PAID_WELCOME_CHECK_INTERVAL,
             first=15,
             name="paid_clients_welcome",
+        )
+        app.job_queue.run_repeating(
+            check_free_publications,
+            interval=300,
+            first=30,
+            name="free_vacancies_resumes",
         )
 
     await app.updater.start_polling(drop_pending_updates=True)
