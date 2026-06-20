@@ -26,12 +26,13 @@ import threading
 import time as time_module
 import random
 import tempfile
+import secrets
 from copy import deepcopy
 from datetime import datetime, timedelta
 
 import pytz
 import requests
-from flask import Flask, request
+from flask import Flask, request, session as flask_session
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -176,6 +177,7 @@ SLOT_STEP_MINUTES = GLOBAL_SLOT_GAP_MINUTES
 
 sessions = {}
 web_app = Flask(__name__)
+web_app.secret_key = os.getenv("FLASK_SECRET_KEY", "hireua-youtube-oauth-secret")
 
 # Stage 4: захист від зависань Telegram/OpenAI.
 # Якщо Telegram або генерація картинки довго не відповідають, бот не мовчить безкінечно.
@@ -1111,6 +1113,7 @@ def youtube_auth():
 
     redirect_uri = f"{BASE_URL}/youtube-callback"
 
+    code_verifier = secrets.token_urlsafe(64)
     flow = Flow.from_client_config(
         {
             "web": {
@@ -1122,15 +1125,20 @@ def youtube_auth():
             }
         },
         scopes=[YOUTUBE_UPLOAD_SCOPE],
+        code_verifier=code_verifier,
+        autogenerate_code_verifier=False,
     )
 
     flow.redirect_uri = redirect_uri
 
-    auth_url, _ = flow.authorization_url(
+    auth_url, state = flow.authorization_url(
         access_type="offline",
         prompt="consent",
         include_granted_scopes="true",
     )
+
+    flask_session["youtube_oauth_state"] = state
+    flask_session["youtube_code_verifier"] = code_verifier
 
     return f'<h2>YouTube Authorization</h2><a href="{auth_url}">Authorize YouTube</a>'
 
@@ -1142,6 +1150,12 @@ def youtube_callback():
 
     redirect_uri = f"{BASE_URL}/youtube-callback"
 
+    code_verifier = flask_session.get("youtube_code_verifier")
+    state = flask_session.get("youtube_oauth_state")
+
+    if not code_verifier:
+        return "Missing YouTube OAuth code_verifier. Open /youtube-auth again and complete authorization in the same browser.", 400
+
     flow = Flow.from_client_config(
         {
             "web": {
@@ -1153,10 +1167,16 @@ def youtube_callback():
             }
         },
         scopes=[YOUTUBE_UPLOAD_SCOPE],
+        state=state,
+        code_verifier=code_verifier,
+        autogenerate_code_verifier=False,
     )
 
     flow.redirect_uri = redirect_uri
     flow.fetch_token(authorization_response=request.url)
+
+    flask_session.pop("youtube_oauth_state", None)
+    flask_session.pop("youtube_code_verifier", None)
 
     refresh_token = flow.credentials.refresh_token
 
