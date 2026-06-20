@@ -157,19 +157,21 @@ PACKAGE_DAY_DISTRIBUTION = {
     "business": ["morning", "morning", "day", "day", "evening", "evening"],
 }
 
-GLOBAL_SLOT_GAP_MINUTES = 20
+SOCIAL_SLOT_GAP_MINUTES = 20
+TELEGRAM_SLOT_GAP_MINUTES = 5
+GLOBAL_SLOT_GAP_MINUTES = SOCIAL_SLOT_GAP_MINUTES
 
 PLATFORM_MIN_GAP_MINUTES = {
-    "telegram": GLOBAL_SLOT_GAP_MINUTES,
-    "facebook": GLOBAL_SLOT_GAP_MINUTES,
-    "instagram": GLOBAL_SLOT_GAP_MINUTES,
-    "youtube": GLOBAL_SLOT_GAP_MINUTES,
+    "telegram": TELEGRAM_SLOT_GAP_MINUTES,
+    "facebook": SOCIAL_SLOT_GAP_MINUTES,
+    "instagram": SOCIAL_SLOT_GAP_MINUTES,
+    "youtube": SOCIAL_SLOT_GAP_MINUTES,
 }
 
 # Для нового каналу YouTube краще не пробивати денний upload-limit.
 YOUTUBE_DAILY_LIMIT = int(os.getenv("YOUTUBE_DAILY_LIMIT", "10"))
 
-# Крок пошуку всередині блоку. Один слот = один клієнт, інтервал між клієнтами 20 хв.
+# Крок пошуку всередині блоку. Соцмережі = 20 хв, Telegram-only = 5 хв.
 SLOT_STEP_MINUTES = GLOBAL_SLOT_GAP_MINUTES
 
 sessions = {}
@@ -1175,7 +1177,8 @@ def admin_only(update: Update) -> bool:
 
 def new_session():
     return {
-        "step": "tg_banner",
+        "step": "choose_admin_mode",
+        "admin_mode": "full",
         "telegram": {"banner": False, "reels": False, "text": False, "promote": False},
         "facebook": {"banner": False, "reels": False, "text": False, "promote": False},
         "instagram": {"banner": False, "reels": False, "promote": False},
@@ -1196,6 +1199,27 @@ def yes_no_keyboard(prefix):
             InlineKeyboardButton("Ні", callback_data=f"{prefix}:no"),
         ]
     ])
+
+
+def admin_mode_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🖼 Банер + текст у Telegram", callback_data="admin_mode:tg_banner_text")],
+        [InlineKeyboardButton("📦 Звичайна публікація TG/FB/IG/YT", callback_data="admin_mode:full")],
+    ])
+
+
+def telegram_packages_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Разово — зараз", callback_data="package:single")],
+        [InlineKeyboardButton("Start — 3 рази/день", callback_data="package:start")],
+        [InlineKeyboardButton("Business — 6 разів/день", callback_data="package:business")],
+    ])
+
+
+def package_keyboard_for_session(session: dict):
+    if session.get("admin_mode") == "tg_banner_text":
+        return telegram_packages_keyboard()
+    return packages_keyboard()
 
 
 def channels_keyboard(selected):
@@ -2524,34 +2548,49 @@ def day_part_bounds(day_dt: datetime, part: str):
     return start, end
 
 
-def slots_for_day_part(day_dt: datetime, part: str):
+def is_telegram_only_platforms(platforms: list[str]) -> bool:
+    platforms = [p for p in (platforms or []) if p]
+    return bool(platforms) and set(platforms) == {"telegram"}
+
+
+def schedule_gap_for_platforms(platforms: list[str]) -> int:
+    return TELEGRAM_SLOT_GAP_MINUTES if is_telegram_only_platforms(platforms) else SOCIAL_SLOT_GAP_MINUTES
+
+
+def slots_for_day_part(day_dt: datetime, part: str, gap_minutes: int | None = None):
     start, end = day_part_bounds(day_dt, part)
     slots = []
+    gap = int(gap_minutes or SOCIAL_SLOT_GAP_MINUTES)
 
-    # Генеруємо природні хвилини всередині блоку, але кожен наступний клієнт
-    # повинен бути не ближче GLOBAL_SLOT_GAP_MINUTES.
     current = start
     while current < end:
-        max_jitter = max(1, GLOBAL_SLOT_GAP_MINUTES - 1)
+        max_jitter = max(1, gap - 1)
         candidate = current + timedelta(minutes=random.randint(1, max_jitter))
         if candidate < end:
             slots.append(candidate)
-        current += timedelta(minutes=GLOBAL_SLOT_GAP_MINUTES)
+        current += timedelta(minutes=gap)
 
     random.shuffle(slots)
     return slots
 
 
 def platform_gap_ok(candidate: datetime, candidate_platforms: list[str], entries: list[dict]) -> bool:
-    """Один слот = один клієнт.
-    Якщо будь-яка активна публікація ближче ніж GLOBAL_SLOT_GAP_MINUTES,
-    новий слот займати не можна, навіть якщо платформи різні.
-    Так клієнт не розʼїжджається по різних платформах і вся публікація йде одним комплектом.
+    """Telegram-only публікації живуть окремо: не блокують соцмережі і не чекають 20 хв.
+    Для Instagram/Facebook/YouTube лишається захист 20 хв між клієнтськими слотами.
     """
     candidate = candidate.astimezone(KYIV_TZ)
+    candidate_tg_only = is_telegram_only_platforms(candidate_platforms)
+    required_gap = schedule_gap_for_platforms(candidate_platforms)
 
     for entry in entries:
         if not is_active_schedule_entry(entry):
+            continue
+
+        other_platforms = entry_platforms(entry)
+        other_tg_only = is_telegram_only_platforms(other_platforms)
+
+        # Telegram-only і соцмережі не блокують одне одного.
+        if candidate_tg_only != other_tg_only:
             continue
 
         try:
@@ -2564,7 +2603,7 @@ def platform_gap_ok(candidate: datetime, candidate_platforms: list[str], entries
         else:
             other = other.astimezone(KYIV_TZ)
 
-        if abs((candidate - other).total_seconds()) < GLOBAL_SLOT_GAP_MINUTES * 60:
+        if abs((candidate - other).total_seconds()) < required_gap * 60:
             return False
 
     return True
@@ -2595,6 +2634,7 @@ def find_free_slots_for_session(
     # Старий Queue і локальний scheduled_posts.json більше не блокують новий графік.
     entries = slotview_active_entries(include_past=False)
     platforms = selected_platforms(session)
+    gap_minutes = schedule_gap_for_platforms(platforms)
     package_key = session.get("package", "single")
     days = int(days_override if days_override is not None else session.get("days", 1))
     distribution = distribution_override or PACKAGE_DAY_DISTRIBUTION.get(package_key, PACKAGE_DAY_DISTRIBUTION["start"])
@@ -2611,10 +2651,10 @@ def find_free_slots_for_session(
                 # Для разової публікації ставимо найближчий безпечний слот у межах дня.
                 part_candidates = []
                 for p in ("morning", "day", "evening"):
-                    part_candidates.extend(slots_for_day_part(day_dt, p))
+                    part_candidates.extend(slots_for_day_part(day_dt, p, gap_minutes))
                 part_candidates = sorted(part_candidates)
             else:
-                part_candidates = slots_for_day_part(day_dt, part)
+                part_candidates = slots_for_day_part(day_dt, part, gap_minutes)
 
             chosen = None
 
@@ -2857,8 +2897,8 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sessions[update.effective_user.id] = new_session()
 
     await update.message.reply_text(
-        "Telegram канали\n\nБанер буде?",
-        reply_markup=yes_no_keyboard("tg_banner")
+        "Оберіть тип публікації:",
+        reply_markup=admin_mode_keyboard()
     )
 
 
@@ -2887,6 +2927,32 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         key, value = data, ""
 
     answer = value == "yes"
+
+    if key == "admin_mode":
+        if value == "tg_banner_text":
+            session.clear()
+            session.update(new_session())
+            session["admin_mode"] = "tg_banner_text"
+            session["step"] = "choose_channels"
+            session["telegram"] = {"banner": True, "reels": False, "text": True, "promote": False}
+            session["facebook"] = {"banner": False, "reels": False, "text": False, "promote": False}
+            session["instagram"] = {"banner": False, "reels": False, "promote": False}
+            session["youtube"] = {"reels": False}
+            await query.edit_message_text(
+                "🖼 Банер + текст у Telegram\n\nОберіть Telegram канали:",
+                reply_markup=channels_keyboard(session["channels"])
+            )
+            return
+
+        session.clear()
+        session.update(new_session())
+        session["admin_mode"] = "full"
+        session["step"] = "tg_banner"
+        await query.edit_message_text(
+            "Telegram канали\n\nБанер буде?",
+            reply_markup=yes_no_keyboard("tg_banner")
+        )
+        return
 
     steps = {
         "tg_banner": ("telegram", "banner", "Telegram канали\n\nReels буде?", "tg_reels"),
@@ -2937,6 +3003,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "channels_done":
         if (session["telegram"]["banner"] or session["telegram"]["reels"] or session["telegram"]["text"]) and not session["channels"]:
             await query.answer("Оберіть хоча б один Telegram канал", show_alert=True)
+            return
+
+        if session.get("admin_mode") == "tg_banner_text":
+            await go_to_materials(query, session)
             return
 
         session["step"] = "fb_banner"
@@ -3024,7 +3094,7 @@ async def go_to_materials(query, session):
         await query.edit_message_text("Надішліть текст публікації.")
     else:
         session["step"] = "choose_package"
-        await query.edit_message_text("Оберіть пакет публікації:", reply_markup=packages_keyboard())
+        await query.edit_message_text("Оберіть пакет публікації:", reply_markup=package_keyboard_for_session(session))
 
 
 async def download_telegram_photo_to_temp(context: ContextTypes.DEFAULT_TYPE, file_id: str):
@@ -3112,7 +3182,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Банер отримано.\n\nНадішліть текст публікації.")
         else:
             session["step"] = "choose_package"
-            await update.message.reply_text("✅ Банер отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
+            await update.message.reply_text("✅ Банер отримано.\n\nОберіть пакет:", reply_markup=package_keyboard_for_session(session))
         return
 
     if step == "wait_reels":
@@ -3129,7 +3199,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Reels отримано.\n\nНадішліть текст публікації.")
         else:
             session["step"] = "choose_package"
-            await update.message.reply_text("✅ Reels отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
+            await update.message.reply_text("✅ Reels отримано.\n\nОберіть пакет:", reply_markup=package_keyboard_for_session(session))
         return
 
     await update.message.reply_text("Зараз бот не очікує медіа. Натисніть /start для нової публікації.")
@@ -4651,7 +4721,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if admin_only(update) and session and session.get("step") == "wait_text":
         session["text"] = text
         session["step"] = "choose_package"
-        await update.message.reply_text("✅ Текст отримано.\n\nОберіть пакет:", reply_markup=packages_keyboard())
+        await update.message.reply_text("✅ Текст отримано.\n\nОберіть пакет:", reply_markup=package_keyboard_for_session(session))
         return
 
     # 3) If an old creative order is active, don't let it hijack normal questions.
@@ -5266,8 +5336,9 @@ async def schedule_posts(
         f"Вікна: ранок 08:00–11:30, день 12:00–16:30, вечір 17:00–22:00\n"
         f"Розподіл: відповідно до обраного пакета\n"
         f"YouTube ліміт: {YOUTUBE_DAILY_LIMIT} Shorts/день\n"
-        f"Інтервал між клієнтами: {GLOBAL_SLOT_GAP_MINUTES} хв\n"
-        f"Один слот = TG/FB/IG/YT разом, якщо платформи вибрані\n\n"
+        f"Інтервал Telegram-only: {TELEGRAM_SLOT_GAP_MINUTES} хв\n"
+        f"Інтервал Instagram/Facebook/YouTube: {SOCIAL_SLOT_GAP_MINUTES} хв\n"
+        f"Telegram-only не блокує чергу соцмереж\n\n"
         f"Перша: {first_slot}\n"
         f"Остання: {last_slot}\n\n"
         f"Найближчі слоти:\n{preview}"
@@ -5331,17 +5402,33 @@ async def time_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     arg = " ".join(context.args).strip() if getattr(context, "args", None) else ""
     day_dt = parse_slots_date(arg)
-    capacity = queue_capacity_for_day(day_dt)["global"]
     title_day = day_dt.strftime("%d.%m.%Y")
+    rows = slotview_rows_for_day(day_dt)
+
+    active_rows = []
+    for row in rows:
+        status = str(row.get("Статус") or "").strip()
+        if status in SLOTVIEW_ACTIVE_STATUSES:
+            active_rows.append(row)
+
+    tg_used = 0
+    social_used = 0
+    for row in active_rows:
+        platforms = slotview_row_platforms(row)
+        if is_telegram_only_platforms(platforms):
+            tg_used += 1
+        else:
+            social_used += 1
+
+    social_capacity = queue_capacity_for_day(day_dt)["global"]
 
     lines = [
         f"📅 Слоти публікацій на {title_day}",
         "",
-        f"Єдиний інтервал між клієнтами: {GLOBAL_SLOT_GAP_MINUTES} хв",
-        f"Всього слотів: {capacity['total']}",
-        f"Зайнято: {capacity['used']}",
-        f"Вільно: {capacity['free']}",
+        f"📱 Telegram-only: інтервал {TELEGRAM_SLOT_GAP_MINUTES} хв, зайнято {tg_used}",
+        f"📸 Social: інтервал {SOCIAL_SLOT_GAP_MINUTES} хв, зайнято {social_used}, вільно {social_capacity['free']}",
         "",
+        "Telegram-only не блокує Instagram/Facebook/YouTube.",
         "Команди: /time — сьогодні, /time завтра, /slots 19.06",
     ]
     await update.message.reply_text("\n".join(lines))
@@ -5356,10 +5443,19 @@ async def slots_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title_day = day_dt.strftime("%d.%m.%Y")
     rows = slotview_rows_for_day(day_dt)
 
-    capacity = queue_capacity_for_day(day_dt)["global"]
+    tg_rows = []
+    social_rows = []
+    for row in rows:
+        platforms = slotview_row_platforms(row)
+        if is_telegram_only_platforms(platforms):
+            tg_rows.append(row)
+        else:
+            social_rows.append(row)
+
     lines = [
         f"📅 SlotView на {title_day}",
-        f"Зайнято: {capacity['used']} | Вільно: {capacity['free']} | Інтервал: {GLOBAL_SLOT_GAP_MINUTES} хв",
+        f"📱 Telegram-only: {len(tg_rows)} рядків, інтервал {TELEGRAM_SLOT_GAP_MINUTES} хв",
+        f"📸 Social: {len(social_rows)} рядків, інтервал {SOCIAL_SLOT_GAP_MINUTES} хв",
         "",
     ]
 
@@ -5376,6 +5472,7 @@ async def slots_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines.append("\nВкладка Google Sheets: SlotView")
     await update.message.reply_text("\n".join(lines))
+
 
 async def queue_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not admin_only(update):
@@ -5398,12 +5495,20 @@ async def queue_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 Черга порожня. Активних публікацій немає.")
         return
 
-    lines = ["📋 Черга публікацій\n"]
-    for row in active[:30]:
+    tg_rows = []
+    social_rows = []
+    for row in active:
+        platforms = queue_entry_platforms(row)
+        if is_telegram_only_platforms(platforms):
+            tg_rows.append(row)
+        else:
+            social_rows.append(row)
+
+    def row_line(row):
         flags = []
         for col in ("TG", "FB", "IG", "YT"):
             flags.append(f"{col}:{'ON' if queue_platform_flag(row.get(col)) else 'OFF'}")
-        lines.append(
+        return (
             f"#{row.get('ID')} — {row.get('Client') or 'Без клієнта'}\n"
             f"{row.get('Package')} | {row.get('Content')}\n"
             f"Час: {row.get('PublishTime')}\n"
@@ -5412,8 +5517,18 @@ async def queue_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Платформи: {' '.join(flags)}\n"
         )
 
-    if len(active) > 30:
-        lines.append(f"... ще {len(active) - 30} активних рядків")
+    lines = ["📋 Черга публікацій", ""]
+    lines.append(f"📱 Telegram Queue: {len(tg_rows)}")
+    for row in tg_rows[:15]:
+        lines.append(row_line(row))
+    if len(tg_rows) > 15:
+        lines.append(f"... ще {len(tg_rows) - 15} Telegram рядків")
+
+    lines.append(f"\n📸 Social Queue: {len(social_rows)}")
+    for row in social_rows[:15]:
+        lines.append(row_line(row))
+    if len(social_rows) > 15:
+        lines.append(f"... ще {len(social_rows) - 15} social рядків")
 
     lines.append("\nЩоб скасувати: у SlotView постав Статус = Cancelled.")
     lines.append("Щоб вимкнути платформу: TG/FB/IG/YT = OFF.")
