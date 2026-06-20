@@ -5281,7 +5281,10 @@ async def schedule_posts(
         # Якщо адмін планує 1 день після того, як частина вікон уже минула,
         # не валимося просто помилкою. Показуємо зрозумілий вибір:
         # залишок сьогодні / повний пакет завтра / скасувати.
-        if days == 1 and distribution_override is None:
+        # Telegram-only пакети не повинні отримувати повідомлення
+        # "не вистачає часу для повного пакета". Вони розподіляються
+        # по блоках ранок/день/вечір незалежно від черги соцмереж.
+        if days == 1 and distribution_override is None and not session.get("telegram_only", False):
             now = datetime.now(KYIV_TZ)
             remaining_distribution = remaining_distribution_for_today(session["package"], now)
             remaining_slots = []
